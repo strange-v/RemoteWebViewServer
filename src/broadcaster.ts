@@ -22,11 +22,11 @@ export class DeviceBroadcaster {
     }
   }
 
-  public sendFrameChunkedAsync(id: string, enc: Encoding, data: FrameOut, frameId: number, maxBytes = 12_000): void {
+  public sendFrameChunkedAsync(id: string, data: FrameOut, frameId: number, maxBytes = 12_000): void {
     const peers = this._clients.get(id);
     if (!peers || peers.size === 0 || data.rects.length === 0) return;
 
-    const packets = this._buildPackets(enc, data.rects, frameId, data.isFullFrame, maxBytes);
+    const packets = this._buildPackets(data.encoding, data.rects, frameId, data.isFullFrame, maxBytes);
     const st = this._ensureState(id);
 
     // Coalesce only whole frames not yet sending

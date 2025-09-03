@@ -90,7 +90,7 @@ export async function ensureDeviceAsync(id: string): Promise<DeviceSession> {
       const out = await processor.processFrameAsync({ data, width: info.width, height: info.height });
       if (out.rects.length > 0) {
         newDevice.frameId = (newDevice.frameId + 1) >>> 0;
-        await broadcaster.sendFrameChunkedAsync(id, Encoding.JPEG, out, newDevice.frameId);
+        await broadcaster.sendFrameChunkedAsync(id, out, newDevice.frameId);
       }
     } catch {
       // swallow non-fatal processing errors

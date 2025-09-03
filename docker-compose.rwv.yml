@@ -13,7 +13,7 @@ services:
       JPEG_QUALITY: 85
       FULLFRAME_EVERY: 50
       WS_PORT: 8081
-      DEBUG_PORT: 9221
+      DEBUG_PORT: 9221 # internal debug port
       HEALTH_PORT: 18080
       USER_DATA_DIR: /pw-data
       DEVICE_MAP_JSON: >
