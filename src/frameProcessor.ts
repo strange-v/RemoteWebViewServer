@@ -4,6 +4,12 @@ export type RGBA = { data: Buffer; width: number; height: number };
 
 export type Rect = { x: number; y: number; w: number; h: number; data: Buffer };
 
+export type FrameOut = {
+  rects: Rect[];
+  isFullFrame: boolean;
+  fullTiles?: number;
+};
+
 export type TilesCfg = {
   tile: number;
   jpegQuality: number;
@@ -17,15 +23,21 @@ export class FrameProcessor {
   private _prev?: Uint32Array;
   private _iter = 0;
 
+  private readonly _fullTilesForFullFrame = 4;
+  private readonly _fullByAreaThreshold = 0.5;
+
   constructor(cfg: TilesCfg) {
     this._cfg = cfg;
   }
 
-  public async processFrameAsync(rgba: RGBA): Promise<Rect[]> {
+  public async processFrameAsync(rgba: RGBA): Promise<FrameOut> {
     if (!this._prev) this._initGrid(rgba.width, rgba.height);
 
-    const full = (this._iter % this._cfg.fullEvery) === 0;
-    const out: Rect[] = [];
+    const forceFull = (this._iter % this._cfg.fullEvery) === 0;
+
+    type TileInfo = { x: number; y: number; w: number; h: number; idx: number; h32: number; changed: boolean };
+    const tiles: TileInfo[] = [];
+    let changedArea = 0;
 
     for (let ty = 0; ty < this._rows; ty++) {
       for (let tx = 0; tx < this._cols; tx++) {
@@ -34,27 +46,104 @@ export class FrameProcessor {
         const w = Math.min(this._cfg.tile, rgba.width  - x);
         const h = Math.min(this._cfg.tile, rgba.height - y);
 
-        const tileRaw = this._extractRaw(rgba, x, y, w, h);
-        const h32 = this._hash32(tileRaw);
-
-        if (!this._prev) continue;
-
+        const raw = this._extractRaw(rgba, x, y, w, h);
+        const h32 = this._hash32(raw);
         const idx = ty * this._cols + tx;
-        if (full || this._prev[idx] !== h32) {
-          const jpg = await sharp(tileRaw, { raw: { width: w, height: h, channels: 4 } })
-            .jpeg({ quality: this._cfg.jpegQuality, mozjpeg: false, chromaSubsampling: "4:2:0" })
-            .toBuffer();
-          out.push({ x, y, w, h, data: jpg });
-          this._prev[idx] = h32;
-        }
+        const prev = this._prev![idx];
+        const changed = forceFull || (prev !== h32);
+
+        tiles.push({ x, y, w, h, idx, h32, changed });
+        if (changed) changedArea += w * h;
       }
+    }
+
+    const totalArea = rgba.width * rgba.height;
+    const changedPct = totalArea > 0 ? (changedArea / totalArea) : 0;
+    const doFull = forceFull || (changedPct > this._fullByAreaThreshold);
+
+    let out: FrameOut;
+    if (doFull) {
+      out = await this._processFullFrame(rgba, tiles);
+    } else {
+      out = await this._processPartialFrame(rgba, tiles);
     }
 
     this._iter++;
     return out;
   }
 
-  // ===== private =====
+  private async _processFullFrame(rgba: RGBA, tilesInfo: { idx: number; h32: number }[]): Promise<FrameOut> {
+    const rectsForFull = this._splitWholeFrame(rgba.width, rgba.height, this._fullTilesForFullFrame);
+    const rects: Rect[] = [];
+
+    for (const r of rectsForFull) {
+      const raw = this._extractRaw(rgba, r.x, r.y, r.w, r.h);
+      const jpg = await sharp(raw, { raw: { width: r.w, height: r.h, channels: 4 } })
+        .jpeg({ quality: this._cfg.jpegQuality, mozjpeg: false, chromaSubsampling: "4:2:0" })
+        .toBuffer();
+      rects.push({ x: r.x, y: r.y, w: r.w, h: r.h, data: jpg });
+    }
+
+    for (const t of tilesInfo) this._prev![t.idx] = t.h32;
+
+    return { rects, isFullFrame: true, fullTiles: this._fullTilesForFullFrame };
+  }
+
+  private async _processPartialFrame(
+    rgba: RGBA,
+    tiles: { x: number; y: number; w: number; h: number; idx: number; h32: number; changed: boolean }[]
+  ): Promise<FrameOut> {
+    const out: Rect[] = [];
+    for (const t of tiles) {
+      if (!t.changed) continue;
+      const raw = this._extractRaw(rgba, t.x, t.y, t.w, t.h);
+      const jpg = await sharp(raw, { raw: { width: t.w, height: t.h, channels: 4 } })
+        .jpeg({ quality: this._cfg.jpegQuality, mozjpeg: false, chromaSubsampling: "4:2:0" })
+        .toBuffer();
+      out.push({ x: t.x, y: t.y, w: t.w, h: t.h, data: jpg });
+      this._prev![t.idx] = t.h32;
+    }
+    return { rects: out, isFullFrame: false };
+  }
+
+  private _splitWholeFrame(w: number, h: number, n: number): { x: number; y: number; w: number; h: number }[] {
+    if (n <= 1) return [{ x: 0, y: 0, w, h }];
+
+    let cols = Math.ceil(Math.sqrt(n));
+    let rows = Math.ceil(n / cols);
+
+    while (cols * rows < n) rows++;
+
+    const widths: number[] = [];
+    const heights: number[] = [];
+    for (let c = 0; c < cols; c++) {
+      const x0 = Math.floor(c * w / cols);
+      const x1 = Math.floor((c + 1) * w / cols);
+      widths.push(x1 - x0);
+    }
+    for (let r = 0; r < rows; r++) {
+      const y0 = Math.floor(r * h / rows);
+      const y1 = Math.floor((r + 1) * h / rows);
+      heights.push(y1 - y0);
+    }
+
+    const rects: { x: number; y: number; w: number; h: number }[] = [];
+    let produced = 0;
+    let yAcc = 0;
+    for (let r = 0; r < rows; r++) {
+      let xAcc = 0;
+      for (let c = 0; c < cols; c++) {
+        if (produced >= n) break;
+        const rw = widths[c];
+        const rh = heights[r];
+        rects.push({ x: xAcc, y: yAcc, w: rw, h: rh });
+        produced++;
+        xAcc += rw;
+      }
+      yAcc += heights[r];
+    }
+    return rects;
+  }
 
   private _initGrid(w: number, h: number) {
     this._cols = Math.ceil(w / this._cfg.tile);
@@ -71,11 +160,10 @@ export class FrameProcessor {
     return out;
   }
 
-  // FNV-1a 32-bit (достатньо для дифу)
   private _hash32(buf: Buffer): number {
     let h = 0x811C9DC5 >>> 0;
-    for (let i = 0; i < buf.length; i += 16) { // стрибаємо, щоб швидше
-      h ^= buf[i];     h = (h * 0x01000193) >>> 0;
+    for (let i = 0; i < buf.length; i += 16) {
+      h ^= buf[i];           h = (h * 0x01000193) >>> 0;
       h ^= buf[i + 4] ?? 0;  h = (h * 0x01000193) >>> 0;
       h ^= buf[i + 8] ?? 0;  h = (h * 0x01000193) >>> 0;
       h ^= buf[i + 12] ?? 0; h = (h * 0x01000193) >>> 0;

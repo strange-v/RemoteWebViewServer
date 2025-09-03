@@ -1,6 +1,7 @@
 export const FRAM_MAGIC = "FRAM";
 export const FRAM_VERSION = 1 as const;
 export const FLAG_LAST_OF_FRAME = 1 << 0;
+export const FLAG_IS_FULL_FRAME = 1 << 1;
 
 export enum Encoding {
     UNKNOWN = 0,

@@ -59,13 +59,13 @@ export async function ensureDeviceAsync(id: string): Promise<DeviceSession> {
     format: 'png',
     maxWidth: cfg.w,
     maxHeight: cfg.h,
-    everyNthFrame: 3
+    everyNthFrame: 5
   });
 
   // const processor = new FrameProcessor(cfg.w, cfg.h, +(process.env.TILE || 32));
   // await processor.initAsync();
   const processor = new FrameProcessor({
-    tile: 128,
+    tile: 32,
     jpegQuality: 85,
     fullEvery: 50
   });
@@ -88,10 +88,10 @@ export async function ensureDeviceAsync(id: string): Promise<DeviceSession> {
       await session.send('Page.screencastFrameAck', { sessionId: evt.sessionId }).catch(() => { });
 
       const { data, info } = await sharp(pngFull).raw().ensureAlpha().toBuffer({ resolveWithObject: true });
-      const tiles = await processor.processFrameAsync({ data, width: info.width, height: info.height });
-      if (tiles.length > 0) {
+      const out = await processor.processFrameAsync({ data, width: info.width, height: info.height });
+      if (out.rects.length > 0) {
         newDevice.frameId = (newDevice.frameId + 1) >>> 0;
-        await broadcaster.sendFrameChunkedAsync(id, Encoding.JPEG, tiles, newDevice.frameId);
+        await broadcaster.sendFrameChunkedAsync(id, Encoding.JPEG, out, newDevice.frameId);
       }
     } catch {
       // swallow non-fatal processing errors

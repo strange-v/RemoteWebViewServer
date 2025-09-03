@@ -1,6 +1,6 @@
-// broadcaster.ts
 import type { WebSocket } from "ws";
-import { buildFramPacket, Encoding, Rect, FLAG_LAST_OF_FRAME } from "./protocol";
+import { buildFramPacket, Encoding, Rect, FLAG_LAST_OF_FRAME, FLAG_IS_FULL_FRAME } from "./protocol";
+import { FrameOut } from "./frameProcessor";
 
 type OutFrame = { frameId: number; packets: Buffer[] };
 
@@ -22,11 +22,11 @@ export class DeviceBroadcaster {
     }
   }
 
-  public sendFrameChunkedAsync(id: string, enc: Encoding, tiles: Rect[], frameId: number, maxBytes = 12_000): void {
+  public sendFrameChunkedAsync(id: string, enc: Encoding, data: FrameOut, frameId: number, maxBytes = 12_000): void {
     const peers = this._clients.get(id);
-    if (!peers || peers.size === 0 || tiles.length === 0) return;
+    if (!peers || peers.size === 0 || data.rects.length === 0) return;
 
-    const packets = this._buildPackets(enc, tiles, frameId, maxBytes);
+    const packets = this._buildPackets(enc, data.rects, frameId, data.isFullFrame, maxBytes);
     const st = this._ensureState(id);
 
     // Coalesce only whole frames not yet sending
@@ -41,13 +41,9 @@ export class DeviceBroadcaster {
     void this._drainAsync(id);
   }
 
-  // ===== public helpers =====
-
   public getPeers(id: string): Set<WebSocket> {
     return this._clients.get(id) ?? new Set();
   }
-
-  // ===== private =====
 
   private _ensureState(id: string) {
     let st = this._state.get(id);
@@ -58,7 +54,7 @@ export class DeviceBroadcaster {
     return st;
   }
 
-  private _buildPackets(enc: Encoding, tiles: Rect[], frameId: number, maxBytes: number): Buffer[] {
+  private _buildPackets(enc: Encoding, tiles: Rect[], frameId: number, isFullFrame: boolean, maxBytes: number): Buffer[] {
     const headerBytes = 4 + 1 + 4 + 1 + 2 + 2;
     const rectOverhead = 2 + 2 + 2 + 2 + 4;
 
@@ -80,7 +76,10 @@ export class DeviceBroadcaster {
 
     const packets: Buffer[] = [];
     for (let i = 0; i < chunks.length; i++) {
-      const flags = (i === chunks.length - 1) ? FLAG_LAST_OF_FRAME : 0;
+      let flags = (i === chunks.length - 1) ? FLAG_LAST_OF_FRAME : 0;
+      if (isFullFrame)
+        flags |= FLAG_IS_FULL_FRAME;
+      
       packets.push(buildFramPacket(chunks[i], frameId, enc, flags));
     }
     return packets;
