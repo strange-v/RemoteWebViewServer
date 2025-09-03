@@ -95,8 +95,6 @@ export async function initCdpRootAsync(wsUrl: string): Promise<void> {
   
   readyPromise = (async () => {
     root = await CdpConnection.connect(wsUrl);
-    // const ctx = await root.send<{ browserContextId: string }>('Target.createBrowserContext', {});
-    // sharedContextId = ctx.browserContextId;
 
     try {
       const info = await root.send<any>('SystemInfo.getInfo');

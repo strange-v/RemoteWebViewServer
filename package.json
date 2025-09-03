@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "devtools-protocol": "^0.0.1312386",
+    "env-var": "^7.5.0",
     "playwright": "^1.55.0",
     "sharp": "^0.33.0",
     "ws": "^8.14.2",

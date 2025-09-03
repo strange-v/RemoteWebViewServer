@@ -1,10 +1,10 @@
 import { chromium } from 'playwright';
 import { initCdpRootAsync, waitForCdpReadyAsync } from './cdpRoot.js';
 
-const DEBUG_PORT = +(process.env.DEBUG_PORT || 9222);
+const DEBUG_PORT = +(process.env.DEBUG_PORT || 9221);
 const USER_DATA_DIR = process.env.USER_DATA_DIR || (process.platform === 'win32'
   ? 'C:\\Temp\\remotewebview-profile'
-  : '/opt/remotewebview-profile');
+  : '/var/temp/remotewebview-profile');
 
 async function fetchJsonVersionAsync(): Promise<{ webSocketDebuggerUrl: string } | null> {
   try {
@@ -25,10 +25,8 @@ async function startHeadlessIfNeededAsync(): Promise<void> {
     args: [
       `--remote-debugging-port=${DEBUG_PORT}`,
       '--no-sandbox',
-      '--disable-gpu',
-      '--disable-dev-shm-usage',
       '--force-device-scale-factor=1',
-      '--headless=new'
+      '--headless=new',
     ],
   });
 

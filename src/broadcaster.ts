@@ -1,6 +1,6 @@
 import type { WebSocket } from "ws";
-import { buildFramPacket, Encoding, Rect, FLAG_LAST_OF_FRAME, FLAG_IS_FULL_FRAME } from "./protocol";
-import { FrameOut } from "./frameProcessor";
+import { buildFramPacket, Encoding, Rect, FLAG_LAST_OF_FRAME, FLAG_IS_FULL_FRAME } from "./protocol.js";
+import { FrameOut } from "./frameProcessor.js";
 
 type OutFrame = { frameId: number; packets: Buffer[] };
 

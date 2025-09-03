@@ -1,4 +1,4 @@
-import { CdpSession } from "./cdpRoot";
+import { CdpSession } from "./cdpRoot.js";
 
 export async function installAntiAnimCSSAsync(session: CdpSession) {
   const antiAnimCSS = `

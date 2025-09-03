@@ -1,11 +1,12 @@
 import { CDPSession } from "playwright";
 import sharp from "sharp";
-import { resolveDevice, loadDeviceMap } from "./config";
-import { getRoot } from "./cdpRoot";
-import { FrameProcessor } from "./frameProcessor";
-import { DeviceBroadcaster } from "./broadcaster";
-import { installAntiAnimCSSAsync } from "./antiAnim";
-import { Encoding } from "./protocol";
+import env from "env-var";
+import { resolveDevice, loadDeviceMap } from "./config.js";
+import { getRoot } from "./cdpRoot.js";
+import { FrameProcessor } from "./frameProcessor.js";
+import { DeviceBroadcaster } from "./broadcaster.js";
+import { installAntiAnimCSSAsync } from "./antiAnim.js";
+import { Encoding } from "./protocol.js";
 
 export type DeviceSession = {
   id: string;
@@ -59,15 +60,13 @@ export async function ensureDeviceAsync(id: string): Promise<DeviceSession> {
     format: 'png',
     maxWidth: cfg.w,
     maxHeight: cfg.h,
-    everyNthFrame: 5
+    everyNthFrame: env.get("EVERY_NTH_FRAME").default("5").asIntPositive()
   });
 
-  // const processor = new FrameProcessor(cfg.w, cfg.h, +(process.env.TILE || 32));
-  // await processor.initAsync();
   const processor = new FrameProcessor({
-    tile: 32,
-    jpegQuality: 85,
-    fullEvery: 50
+    tile: env.get("TILE").default("32").asIntPositive(),
+    jpegQuality: env.get("JPEG_QUALITY").default("85").asIntPositive(),
+    fullEvery: env.get("FULLFRAME_EVERY").default("50").asIntPositive(),
   });
 
   const newDevice: DeviceSession = {

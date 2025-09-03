@@ -1,9 +1,12 @@
+import http from 'http';
 import { WebSocketServer } from "ws"
-import { broadcaster, ensureDeviceAsync, cleanupIdleAsync } from './deviceManager';
-import { InputRouter } from "./inputRouter";
-import { bootstrapAsync } from './browser';
+import env from "env-var";
+import { broadcaster, ensureDeviceAsync, cleanupIdleAsync } from './deviceManager.js';
+import { InputRouter } from "./inputRouter.js";
+import { bootstrapAsync } from './browser.js';
 
-const WS_PORT = +(process.env.WS_PORT || 8081);
+const WS_PORT = env.get("WS_PORT").default("8081").asIntPositive();
+const HEALTH_PORT = env.get("HEALTH_PORT").default("18080").asIntPositive();
 
 const wss = new WebSocketServer({ port: WS_PORT, perMessageDeflate: false });
 const inputRouter = new InputRouter(12);
@@ -30,7 +33,15 @@ wss.on("connection", async (ws, req) => {
     dev.lastActive = Date.now();
     broadcaster.removeClient(id, ws);
   })
-})
+});
+
+http.createServer(async (req, res) => {
+  try {
+    res.writeHead(200); res.end('ok');
+  } catch (e) {
+    res.writeHead(500); res.end('err');
+  }
+}).listen(HEALTH_PORT);
 
 // setInterval(() => cleanupIdleAsync(), 60_000);
 

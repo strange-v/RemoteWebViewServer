@@ -1,6 +1,8 @@
+version: "3.9"
+
 services:
-  rdpserver:
-    build: .
+  rwvserver:
+    build: ./RemoteWebViewServer
     image: remote-web-view-server:latest
     container_name: remote-web-view-server
     restart: unless-stopped
@@ -8,9 +10,10 @@ services:
       VIEWPORT_W: 480
       VIEWPORT_H: 480
       TILE: 32
+      JPEG_QUALITY: 85
       FULLFRAME_EVERY: 50
       WS_PORT: 8081
-      DEBUG_PORT: 9222
+      DEBUG_PORT: 9221
       HEALTH_PORT: 18080
       USER_DATA_DIR: /pw-data
       DEVICE_MAP_JSON: >
@@ -18,19 +21,39 @@ services:
           { "id": "living-room", "url": "http://172.16.0.252:8123/dashboard-mobile/0" },
           { "id": "master-bedroom", "url": "http://172.16.0.252:8123/dashboard-mobile/1" }
         ]
-    # ports:
-    #   - "8081:8081"   # WebSocket для ESP32
-    #   - "9222:9222"   # remote DevTools для дебагу з Windows
-    # expose:
-    #   - "18080"
+      LIBGL_ALWAYS_SOFTWARE: "0"
+      LIBVA_DRIVER_NAME: "iHD"
+    ports:
+      - "8081:8081"
+      - "9222:9222"
+    expose:
+      - "18080" # healthcheck
+      - "9221" # debug port for socat
     volumes:
       - /opt/volumes/esp32-rdp/pw-data:/pw-data
+    devices:
+      - "/dev/dri:/dev/dri"
+    group_add:
+      - "993"
+      - "44"
+    shm_size: 1gb
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:18080 || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 10s
-    # devices:
-    #   - "/dev/dri:/dev/dri"
-    
+
+  debug-proxy:
+    image: alpine/socat
+    container_name: remote-web-view-server-debug
+    restart: unless-stopped
+    network_mode: "service:rwvserver"
+    depends_on:
+      rwvserver:
+        condition: service_healthy
+    command:
+    - "-d"
+    - "-d"
+    - "TCP-LISTEN:9222,fork,reuseaddr,keepalive"
+    - "TCP:127.0.0.1:9221"
