@@ -55,5 +55,5 @@ services:
     command:
     - "-d"
     - "-d"
-    - "TCP-LISTEN:9222,fork,reuseaddr,keepalive"
+    - "TCP-LISTEN:9222,fork,reuseaddr,keepalive" # external debug port
     - "TCP:127.0.0.1:9221"
