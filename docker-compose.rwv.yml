@@ -7,11 +7,13 @@ services:
     container_name: remote-web-view-server
     restart: unless-stopped
     environment:
-      VIEWPORT_W: 480
-      VIEWPORT_H: 480
-      TILE: 32
-      JPEG_QUALITY: 85
+      DEFAULT_VIEWPORT_W: 480
+      DEFAULT_VIEWPORT_H: 480
+      TILE_COUNT: 32
+      FULLFRAME_TILE_COUNT: 4
+      FULLFRAME_AREA_THRESHOLD: 0.5
       FULLFRAME_EVERY: 50
+      JPEG_QUALITY: 85
       MAX_BYTES_PER_WS_MSG: 14336
       WS_PORT: 8081
       DEBUG_PORT: 9221 # internal debug port

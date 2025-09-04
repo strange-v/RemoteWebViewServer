@@ -13,7 +13,9 @@ export type FrameOut = {
 };
 
 export type TilesCfg = {
-  tile: number;
+  tileCount: number;
+  fullframeTileCount: number;
+  fullframeAreaThreshold: number;
   jpegQuality: number;
   fullEvery: number;
 };
@@ -24,9 +26,6 @@ export class FrameProcessor {
   private _rows = 0;
   private _prev?: Uint32Array;
   private _iter = 0;
-
-  private readonly _fullTilesForFullFrame = 4;
-  private readonly _fullByAreaThreshold = 0.5;
 
   constructor(cfg: TilesCfg) {
     this._cfg = cfg;
@@ -44,10 +43,10 @@ export class FrameProcessor {
 
     for (let ty = 0; ty < this._rows; ty++) {
       for (let tx = 0; tx < this._cols; tx++) {
-        const x = tx * this._cfg.tile;
-        const y = ty * this._cfg.tile;
-        const w = Math.min(this._cfg.tile, rgba.width  - x);
-        const h = Math.min(this._cfg.tile, rgba.height - y);
+        const x = tx * this._cfg.tileCount;
+        const y = ty * this._cfg.tileCount;
+        const w = Math.min(this._cfg.tileCount, rgba.width  - x);
+        const h = Math.min(this._cfg.tileCount, rgba.height - y);
 
         const raw = this._extractRaw(rgba, x, y, w, h);
         const h32 = this._hash32(raw);
@@ -62,7 +61,7 @@ export class FrameProcessor {
 
     const totalArea = rgba.width * rgba.height;
     const changedPct = totalArea > 0 ? (changedArea / totalArea) : 0;
-    const doFull = forceFull || (changedPct > this._fullByAreaThreshold);
+    const doFull = forceFull || (changedPct > this._cfg.fullframeAreaThreshold);
 
     let out: FrameOut;
     if (doFull) {
@@ -80,7 +79,7 @@ export class FrameProcessor {
     tilesInfo: { idx: number; h32: number }[],
     encoding: Encoding
   ): Promise<FrameOut> {
-    const rectsForFull = this._splitWholeFrame(rgba.width, rgba.height, this._fullTilesForFullFrame);
+    const rectsForFull = this._splitWholeFrame(rgba.width, rgba.height, this._cfg.fullframeTileCount);
     const rects: Rect[] = [];
 
     for (const r of rectsForFull) {
@@ -91,7 +90,7 @@ export class FrameProcessor {
 
     for (const t of tilesInfo) this._prev![t.idx] = t.h32;
 
-    return { rects, isFullFrame: true, fullTiles: this._fullTilesForFullFrame, encoding };
+    return { rects, isFullFrame: true, fullTiles: this._cfg.fullframeTileCount, encoding };
   }
 
   private async _processPartialFrame(
@@ -149,8 +148,8 @@ export class FrameProcessor {
   }
 
   private _initGrid(w: number, h: number) {
-    this._cols = Math.ceil(w / this._cfg.tile);
-    this._rows = Math.ceil(h / this._cfg.tile);
+    this._cols = Math.ceil(w / this._cfg.tileCount);
+    this._rows = Math.ceil(h / this._cfg.tileCount);
     this._prev = new Uint32Array(this._cols * this._rows);
   }
 

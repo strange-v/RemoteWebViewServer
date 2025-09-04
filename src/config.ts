@@ -17,8 +17,8 @@ function parseJsonMap(value: string): Map<string, DeviceCfg> {
   const devices = JSON.parse(value) as DeviceCfgRaw[]
   
   for (const device of devices) {
-    const defaultWidth = parseInt(process.env.VIEWPORT_W ? process.env.VIEWPORT_W: '480', 10)
-    const defaultHeight = parseInt(process.env.VIEWPORT_H ? process.env.VIEWPORT_H: '480', 10)
+    const defaultWidth = parseInt(process.env.DEFAULT_VIEWPORT_W ? process.env.DEFAULT_VIEWPORT_W: '480', 10)
+    const defaultHeight = parseInt(process.env.DEFAULT_VIEWPORT_H ? process.env.DEFAULT_VIEWPORT_H: '480', 10)
 
     if (!device?.id || !device?.url) continue
     
