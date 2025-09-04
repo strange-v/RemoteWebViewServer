@@ -12,6 +12,7 @@ services:
       TILE: 32
       JPEG_QUALITY: 85
       FULLFRAME_EVERY: 50
+      MAX_BYTES_PER_WS_MSG: 14336
       WS_PORT: 8081
       DEBUG_PORT: 9221 # internal debug port
       HEALTH_PORT: 18080

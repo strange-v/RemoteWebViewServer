@@ -6,7 +6,6 @@ import { getRoot } from "./cdpRoot.js";
 import { FrameProcessor } from "./frameProcessor.js";
 import { DeviceBroadcaster } from "./broadcaster.js";
 import { installAntiAnimCSSAsync } from "./antiAnim.js";
-import { Encoding } from "./protocol.js";
 
 export type DeviceSession = {
   id: string;
@@ -81,6 +80,7 @@ export async function ensureDeviceAsync(id: string): Promise<DeviceSession> {
   };
   devices.set(id, newDevice);
 
+  const maxBytesPerWsMsg = env.get("MAX_BYTES_PER_WS_MSG").default("12288").asIntPositive();
   session.on('Page.screencastFrame', async (evt: any) => {
     try {
       const pngFull = Buffer.from(evt.data, 'base64');
@@ -90,7 +90,7 @@ export async function ensureDeviceAsync(id: string): Promise<DeviceSession> {
       const out = await processor.processFrameAsync({ data, width: info.width, height: info.height });
       if (out.rects.length > 0) {
         newDevice.frameId = (newDevice.frameId + 1) >>> 0;
-        await broadcaster.sendFrameChunkedAsync(id, out, newDevice.frameId);
+        await broadcaster.sendFrameChunkedAsync(id, out, newDevice.frameId, maxBytesPerWsMsg);
       }
     } catch {
       // swallow non-fatal processing errors
