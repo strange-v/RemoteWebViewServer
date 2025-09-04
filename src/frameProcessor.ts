@@ -8,7 +8,6 @@ export type Rect = { x: number; y: number; w: number; h: number; data: Buffer };
 export type FrameOut = {
   rects: Rect[];
   isFullFrame: boolean;
-  fullTiles?: number;
   encoding: Encoding;
 };
 
@@ -45,7 +44,7 @@ export class FrameProcessor {
       for (let tx = 0; tx < this._cols; tx++) {
         const x = tx * this._cfg.tileCount;
         const y = ty * this._cfg.tileCount;
-        const w = Math.min(this._cfg.tileCount, rgba.width  - x);
+        const w = Math.min(this._cfg.tileCount, rgba.width - x);
         const h = Math.min(this._cfg.tileCount, rgba.height - y);
 
         const raw = this._extractRaw(rgba, x, y, w, h);
@@ -90,7 +89,7 @@ export class FrameProcessor {
 
     for (const t of tilesInfo) this._prev![t.idx] = t.h32;
 
-    return { rects, isFullFrame: true, fullTiles: this._cfg.fullframeTileCount, encoding };
+    return { rects, isFullFrame: true, encoding };
   }
 
   private async _processPartialFrame(
@@ -112,38 +111,38 @@ export class FrameProcessor {
   private _splitWholeFrame(w: number, h: number, n: number): { x: number; y: number; w: number; h: number }[] {
     if (n <= 1) return [{ x: 0, y: 0, w, h }];
 
-    let cols = Math.ceil(Math.sqrt(n));
-    let rows = Math.ceil(n / cols);
-    while (cols * rows < n) rows++;
-
-    const widths: number[] = [];
-    const heights: number[] = [];
-    for (let c = 0; c < cols; c++) {
-      const x0 = Math.floor((c * w) / cols);
-      const x1 = Math.floor(((c + 1) * w) / cols);
-      widths.push(x1 - x0);
-    }
-    for (let r = 0; r < rows; r++) {
-      const y0 = Math.floor((r * h) / rows);
-      const y1 = Math.floor(((r + 1) * h) / rows);
-      heights.push(y1 - y0);
-    }
+    // pick rows, cols so that rows * cols == n and |rows - cols| is minimal
+    let rows = Math.floor(Math.sqrt(n));
+    while (rows > 1 && (n % rows !== 0)) rows--;
+    const cols = Math.floor(n / rows); // exact factor, rows*cols === n
 
     const rects: { x: number; y: number; w: number; h: number }[] = [];
-    let produced = 0;
-    let yAcc = 0;
-    for (let r = 0; r < rows; r++) {
-      let xAcc = 0;
-      for (let c = 0; c < cols; c++) {
-        if (produced >= n) break;
-        const rw = widths[c];
-        const rh = heights[r];
-        rects.push({ x: xAcc, y: yAcc, w: rw, h: rh });
-        produced++;
-        xAcc += rw;
+
+    // helper to get exact integer splits that sum to dimension
+    const split = (size: number, parts: number): number[] => {
+      const out: number[] = [];
+      let prev = 0;
+      for (let i = 1; i <= parts; i++) {
+        const cur = Math.floor((i * size) / parts);
+        out.push(cur - prev);
+        prev = cur;
       }
-      yAcc += heights[r];
+      return out;
+    };
+
+    const widths = split(w, cols);
+    const heights = split(h, rows);
+
+    let y = 0;
+    for (let r = 0; r < rows; r++) {
+      let x = 0;
+      for (let c = 0; c < cols; c++) {
+        rects.push({ x, y, w: widths[c], h: heights[r] });
+        x += widths[c];
+      }
+      y += heights[r];
     }
+
     return rects;
   }
 
@@ -164,9 +163,12 @@ export class FrameProcessor {
 
   private async _encode(rawRgba: Buffer, w: number, h: number, enc: Encoding): Promise<Buffer> {
     switch (enc) {
-      case Encoding.JPEG:   return this._encodeJPEG(rawRgba, w, h);
-      case Encoding.RAW565: return this._encodeRAW565(rawRgba);
-      default:              return this._encodeJPEG(rawRgba, w, h);
+      case Encoding.JPEG:
+        return this._encodeJPEG(rawRgba, w, h);
+      case Encoding.RAW565:
+        return this._encodeRAW565(rawRgba);
+      default:
+        return this._encodeJPEG(rawRgba, w, h);
     }
   }
 
@@ -193,9 +195,9 @@ export class FrameProcessor {
   private _hash32(buf: Buffer): number {
     let h = 0x811C9DC5 >>> 0;
     for (let i = 0; i < buf.length; i += 16) {
-      h ^= buf[i];           h = (h * 0x01000193) >>> 0;
-      h ^= buf[i + 4] ?? 0;  h = (h * 0x01000193) >>> 0;
-      h ^= buf[i + 8] ?? 0;  h = (h * 0x01000193) >>> 0;
+      h ^= buf[i]; h = (h * 0x01000193) >>> 0;
+      h ^= buf[i + 4] ?? 0; h = (h * 0x01000193) >>> 0;
+      h ^= buf[i + 8] ?? 0; h = (h * 0x01000193) >>> 0;
       h ^= buf[i + 12] ?? 0; h = (h * 0x01000193) >>> 0;
     }
     return h >>> 0;

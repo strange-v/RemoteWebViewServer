@@ -1,5 +1,5 @@
 import type { WebSocket } from "ws";
-import { buildFramPacket, Encoding, Rect, FLAG_LAST_OF_FRAME, FLAG_IS_FULL_FRAME } from "./protocol.js";
+import { buildFramPackets } from "./protocol.js";
 import { FrameOut } from "./frameProcessor.js";
 
 type OutFrame = { frameId: number; packets: Buffer[] };
@@ -26,7 +26,7 @@ export class DeviceBroadcaster {
     const peers = this._clients.get(id);
     if (!peers || peers.size === 0 || data.rects.length === 0) return;
 
-    const packets = this._buildPackets(data.encoding, data.rects, frameId, data.isFullFrame, maxBytes);
+    const packets = buildFramPackets(data.rects, data.encoding, frameId, data.isFullFrame, maxBytes);
     const st = this._ensureState(id);
 
     // Coalesce only whole frames not yet sending
@@ -52,37 +52,6 @@ export class DeviceBroadcaster {
       this._state.set(id, st);
     }
     return st;
-  }
-
-  private _buildPackets(enc: Encoding, tiles: Rect[], frameId: number, isFullFrame: boolean, maxBytes: number): Buffer[] {
-    const headerBytes = 4 + 1 + 4 + 1 + 2 + 2;
-    const rectOverhead = 2 + 2 + 2 + 2 + 4;
-
-    const chunks: Rect[][] = [];
-    let cur: Rect[] = [];
-    let curBytes = headerBytes;
-
-    for (const r of tiles) {
-      const rBytes = rectOverhead + r.data.length;
-      if (cur.length && curBytes + rBytes > maxBytes) {
-        chunks.push(cur);
-        cur = [];
-        curBytes = headerBytes;
-      }
-      cur.push(r);
-      curBytes += rBytes;
-    }
-    if (cur.length) chunks.push(cur);
-
-    const packets: Buffer[] = [];
-    for (let i = 0; i < chunks.length; i++) {
-      let flags = (i === chunks.length - 1) ? FLAG_LAST_OF_FRAME : 0;
-      if (isFullFrame)
-        flags |= FLAG_IS_FULL_FRAME;
-      
-      packets.push(buildFramPacket(chunks[i], frameId, enc, flags));
-    }
-    return packets;
   }
 
   private async _drainAsync(id: string): Promise<void> {
