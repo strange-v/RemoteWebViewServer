@@ -7,7 +7,7 @@ services:
     environment:
       DEFAULT_VIEWPORT_W: 480
       DEFAULT_VIEWPORT_H: 480
-      TILE_COUNT: 32
+      TILE_SIZE: 32
       FULLFRAME_TILE_COUNT: 4
       FULLFRAME_AREA_THRESHOLD: 0.5
       FULLFRAME_EVERY: 50

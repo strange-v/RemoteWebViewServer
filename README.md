@@ -11,6 +11,7 @@ Headless browser that renders target web pages (e.g., Home Assistant dashboards)
 - Optional DevTools access (via TCP proxy) for live page inspection.
 
 ## Image Tags & Versioning
+
 - latest — newest stable release
 - beta — newest pre-release (rolling)
 - Semantic versions: X.Y.Z, plus convenience tags X.Y, X on stable releases
@@ -28,7 +29,7 @@ services:
     environment:
       DEFAULT_VIEWPORT_W: 480
       DEFAULT_VIEWPORT_H: 480
-      TILE_COUNT: 32
+      TILE_SIZE: 32
       FULLFRAME_TILE_COUNT: 4
       FULLFRAME_AREA_THRESHOLD: 0.5
       FULLFRAME_EVERY: 50
@@ -77,5 +78,4 @@ services:
       - "-d"
       - "TCP-LISTEN:9222,fork,reuseaddr,keepalive" # external DevTools port
       - "TCP:127.0.0.1:9221"
-
 ```

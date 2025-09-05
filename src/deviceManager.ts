@@ -65,7 +65,7 @@ export async function ensureDeviceAsync(id: string): Promise<DeviceSession> {
   });
 
   const processor = new FrameProcessor({
-    tileCount: env.get("TILE_COUNT").default("32").asIntPositive(),
+    tileSize: env.get("TILE_SIZE").default("32").asIntPositive(),
     fullframeTileCount: env.get("FULLFRAME_TILE_COUNT").default("4").asIntPositive(),
     fullframeAreaThreshold: env.get("FULLFRAME_AREA_THRESHOLD").default("0.5").asFloatPositive(),
     jpegQuality: env.get("JPEG_QUALITY").default("85").asIntPositive(),

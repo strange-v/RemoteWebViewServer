@@ -13,7 +13,7 @@ export type FrameOut = {
 };
 
 export type TilesCfg = {
-  tileCount: number;
+  tileSize: number;
   fullframeTileCount: number;
   fullframeAreaThreshold: number;
   jpegQuality: number;
@@ -43,10 +43,10 @@ export class FrameProcessor {
 
     for (let ty = 0; ty < this._rows; ty++) {
       for (let tx = 0; tx < this._cols; tx++) {
-        const x = tx * this._cfg.tileCount;
-        const y = ty * this._cfg.tileCount;
-        const w = Math.min(this._cfg.tileCount, rgba.width - x);
-        const h = Math.min(this._cfg.tileCount, rgba.height - y);
+        const x = tx * this._cfg.tileSize;
+        const y = ty * this._cfg.tileSize;
+        const w = Math.min(this._cfg.tileSize, rgba.width - x);
+        const h = Math.min(this._cfg.tileSize, rgba.height - y);
 
         const raw = this._extractRaw(rgba, x, y, w, h);
         const h32 = hash32(raw);
@@ -148,8 +148,8 @@ export class FrameProcessor {
   }
 
   private _initGrid(w: number, h: number) {
-    this._cols = Math.ceil(w / this._cfg.tileCount);
-    this._rows = Math.ceil(h / this._cfg.tileCount);
+    this._cols = Math.ceil(w / this._cfg.tileSize);
+    this._rows = Math.ceil(h / this._cfg.tileSize);
     this._prev = new Uint32Array(this._cols * this._rows);
   }
 
