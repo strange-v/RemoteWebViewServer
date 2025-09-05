@@ -1,10 +1,8 @@
-version: "3.9"
-
 services:
   rwvserver:
     build: ./RemoteWebViewServer
-    image: remote-web-view-server:latest
-    container_name: remote-web-view-server
+    image: remote-webview-server:latest
+    container_name: remote-webview-server
     restart: unless-stopped
     environment:
       DEFAULT_VIEWPORT_W: 480
@@ -49,7 +47,7 @@ services:
 
   debug-proxy:
     image: alpine/socat
-    container_name: remote-web-view-server-debug
+    container_name: remote-webview-server-debug
     restart: unless-stopped
     network_mode: "service:rwvserver"
     depends_on:
