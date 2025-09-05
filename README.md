@@ -79,3 +79,7 @@ services:
       - "TCP-LISTEN:9222,fork,reuseaddr,keepalive" # external DevTools port
       - "TCP:127.0.0.1:9221"
 ```
+
+## Known Issues
+
+- Scrolling is not supported (yet).
