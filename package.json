@@ -8,9 +8,9 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "playwright-core": "1.55.0",
     "devtools-protocol": "^0.0.1510116",
     "env-var": "^7.5.0",
-    "playwright": "^1.55.0",
     "sharp": "^0.34.3",
     "ws": "^8.18.3",
     "xxhash-wasm": "^1.1.0"

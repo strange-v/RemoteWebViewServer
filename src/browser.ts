@@ -1,4 +1,4 @@
-import { chromium } from 'playwright';
+import { chromium } from 'playwright-core';
 import { initCdpRootAsync, waitForCdpReadyAsync } from './cdpRoot.js';
 
 const DEBUG_PORT = +(process.env.DEBUG_PORT || 9221);

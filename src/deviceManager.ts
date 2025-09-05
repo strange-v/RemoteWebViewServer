@@ -1,4 +1,4 @@
-import { CDPSession } from "playwright";
+import { CDPSession } from "playwright-core";
 import sharp from "sharp";
 import env from "env-var";
 import { resolveDevice, loadDeviceMap } from "./config.js";

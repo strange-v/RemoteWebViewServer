@@ -1,8 +1,6 @@
-FROM mcr.microsoft.com/playwright:v1.55.0-jammy AS base
-
+FROM mcr.microsoft.com/playwright:v1.55.0-jammy AS deps
 WORKDIR /app
-
-FROM base AS deps
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
