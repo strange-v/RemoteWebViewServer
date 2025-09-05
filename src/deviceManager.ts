@@ -6,6 +6,7 @@ import { getRoot } from "./cdpRoot.js";
 import { FrameProcessor } from "./frameProcessor.js";
 import { DeviceBroadcaster } from "./broadcaster.js";
 import { installAntiAnimCSSAsync } from "./antiAnim.js";
+import { hash32 } from "./util.js";
 
 export type DeviceSession = {
   id: string;
@@ -15,6 +16,7 @@ export type DeviceSession = {
   url: string;
   lastActive: number;
   frameId: number;
+  prevFrameHash: number;
   processor: FrameProcessor;
 };
 
@@ -78,6 +80,7 @@ export async function ensureDeviceAsync(id: string): Promise<DeviceSession> {
     url: cfg.url,
     lastActive: Date.now(),
     frameId: 0,
+    prevFrameHash: 0,
     processor
   };
   devices.set(id, newDevice);
@@ -87,6 +90,10 @@ export async function ensureDeviceAsync(id: string): Promise<DeviceSession> {
     try {
       const pngFull = Buffer.from(evt.data, 'base64');
       await session.send('Page.screencastFrameAck', { sessionId: evt.sessionId }).catch(() => { });
+
+      const h32 = hash32(pngFull);
+      if (newDevice.prevFrameHash === h32) return;
+      newDevice.prevFrameHash = h32;
 
       const { data, info } = await sharp(pngFull).raw().ensureAlpha().toBuffer({ resolveWithObject: true });
       const out = await processor.processFrameAsync({ data, width: info.width, height: info.height });

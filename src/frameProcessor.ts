@@ -1,5 +1,6 @@
 import sharp from "sharp";
 import { Encoding } from "./protocol.js";
+import { hash32 } from "./util.js";
 
 export type RGBA = { data: Buffer; width: number; height: number };
 
@@ -48,7 +49,7 @@ export class FrameProcessor {
         const h = Math.min(this._cfg.tileCount, rgba.height - y);
 
         const raw = this._extractRaw(rgba, x, y, w, h);
-        const h32 = this._hash32(raw);
+        const h32 = hash32(raw);
         const idx = ty * this._cols + tx;
         const prev = this._prev![idx];
         const changed = forceFull || (prev !== h32);
@@ -190,16 +191,5 @@ export class FrameProcessor {
       out[i * 2 + 1] = (v >> 8) & 0xFF;
     }
     return out;
-  }
-
-  private _hash32(buf: Buffer): number {
-    let h = 0x811C9DC5 >>> 0;
-    for (let i = 0; i < buf.length; i += 16) {
-      h ^= buf[i]; h = (h * 0x01000193) >>> 0;
-      h ^= buf[i + 4] ?? 0; h = (h * 0x01000193) >>> 0;
-      h ^= buf[i + 8] ?? 0; h = (h * 0x01000193) >>> 0;
-      h ^= buf[i + 12] ?? 0; h = (h * 0x01000193) >>> 0;
-    }
-    return h >>> 0;
   }
 }
