@@ -52,11 +52,6 @@ services:
       - "9221"                        # internal DevTools port
     volumes:
       - /opt/volumes/esp32-rdp/pw-data:/pw-data
-    devices:
-      - "/dev/dri:/dev/dri"           # GPU (optional)
-    group_add:
-      - "993"                         # render group GID (adjust for your host)
-      - "44"                          # video group GID  (adjust for your host)
     shm_size: 1gb
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:18080 || exit 1"]
