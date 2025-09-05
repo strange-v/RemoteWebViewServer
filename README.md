@@ -22,7 +22,7 @@ You can pin a stable release (`1.4.0`) or track channels (`latest`, `beta`) depe
 ```yaml
 services:
   rwvserver:
-    image: strangev/remote-webview-server:latest:latest  # use :beta for pre-release
+    image: strangev/remote-webview-server:latest  # use :beta for pre-release
     container_name: remote-webview-server
     restart: unless-stopped
     environment:
