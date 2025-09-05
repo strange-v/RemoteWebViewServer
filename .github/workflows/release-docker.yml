@@ -1,8 +1,10 @@
 name: release docker image
 
 on:
+  # Trigger when a GitHub Release is published (stable or pre-release).
   release:
     types: [published]
+  # Trigger when tags like v1.2.3 or 1.2.3 are pushed.
   push:
     tags:
       - 'v*.*.*'
@@ -12,9 +14,17 @@ jobs:
   publish:
     runs-on: ubuntu-latest
 
+    # Unify tag name across events and keep repo name handy.
+    env:
+      REF_NAME: ${{ github.ref_name || github.event.release.tag_name }}
+      DOCKERHUB_REPO: ${{ vars.DOCKERHUB_REPO }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Fetch full history so metadata-action can parse semver/tag properly.
+          fetch-depth: 0
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -22,31 +32,50 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Set up QEMU (multi-arch)
+      - name: Set up QEMU (for multi-arch builds)
         uses: docker/setup-qemu-action@v3
 
-      - name: Set up Buildx
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Docker meta (генерує теги/лейбли з семвер-тега)
+      - name: Docker meta (derive tags/labels from the git tag)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ secrets.DOCKERHUB_REPO }}   # напр. volodymyr/myapp
+          images: ${{ env.DOCKERHUB_REPO }}
+          # Tag strategy:
+          # - Always publish the full semver from the git tag (includes -beta/-rc).
+          # - Publish short tags (major.minor, major) only for stable tags (no hyphen).
+          # - Move the "latest" channel only for stable tags.
+          # - Move the "beta" channel when the tag contains "-beta".
           tags: |
+            # Full version (e.g., 1.4.0 or 1.4.0-beta.2)
             type=semver,pattern={{version}},priority=100
-            type=semver,pattern={{major}}.{{minor}},priority=90
-            type=semver,pattern={{major}},priority=80
+
+            # Short tags only for stable (no hyphen in tag)
+            type=semver,pattern={{major}}.{{minor}},priority=90,enable=${{ !contains(env.REF_NAME, '-') }}
+            type=semver,pattern={{major}},priority=80,enable=${{ !contains(env.REF_NAME, '-') }}
+
+            # Stable channel
+            type=raw,value=latest,priority=70,enable=${{ !contains(env.REF_NAME, '-') }}
+
+            # Beta channel (rolling tag pointing to the newest beta)
+            type=raw,value=beta,priority=60,enable=${{ contains(env.REF_NAME, '-beta') }}
+
+            # (Optional) RC channel:
+            # type=raw,value=rc,priority=60,enable=${{ contains(env.REF_NAME, '-rc') }}
+          # Add common OCI labels (source, version, etc.)
           flavor: |
-            latest=auto
+            latest=false
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          push: true                       # Always push on these events
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # GitHub Actions cache for faster subsequent builds
           cache-from: type=gha
           cache-to: type=gha,mode=max
