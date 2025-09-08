@@ -24,8 +24,6 @@ services:
           { "id": "living-room", "url": "http://172.16.0.252:8123/dashboard-mobile/0" },
           { "id": "master-bedroom", "url": "http://172.16.0.252:8123/dashboard-mobile/1" }
         ]
-      LIBGL_ALWAYS_SOFTWARE: "0"
-      LIBVA_DRIVER_NAME: "iHD"
     ports:
       - "8081:8081"
       - "9222:9222"
