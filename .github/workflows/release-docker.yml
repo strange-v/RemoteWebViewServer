@@ -5,10 +5,10 @@ on:
   release:
     types: [published]
   # Trigger when tags like v1.2.3 or 1.2.3 are pushed.
-  push:
-    tags:
-      - 'v*.*.*'
-      - '*.*.*'
+  # push:
+  #   tags:
+  #     - 'v*.*.*'
+  #     - '*.*.*'
 
 jobs:
   publish:
