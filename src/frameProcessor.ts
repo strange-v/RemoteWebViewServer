@@ -26,15 +26,25 @@ export class FrameProcessor {
   private _rows = 0;
   private _prev?: Uint32Array;
   private _iter = 0;
+  private _fullFrameRequested = false;
 
   constructor(cfg: TilesCfg) {
     this._cfg = cfg;
   }
 
+  public requestFullFrame(): void {
+    this._iter = 0;
+    this._fullFrameRequested = true;
+  }
+
   public async processFrameAsync(rgba: RGBA): Promise<FrameOut> {
     if (!this._prev) this._initGrid(rgba.width, rgba.height);
 
-    const forceFull = (this._iter % this._cfg.fullEvery) === 0;
+    let forceFull = (this._iter % this._cfg.fullEvery) === 0;
+    if (this._fullFrameRequested) {
+      forceFull = true;
+      this._fullFrameRequested = false;
+    }
     const chosenEncoding: Encoding = Encoding.JPEG;
 
     type TileInfo = { x: number; y: number; w: number; h: number; idx: number; h32: number; changed: boolean };
@@ -98,28 +108,35 @@ export class FrameProcessor {
     tiles: { x: number; y: number; w: number; h: number; idx: number; h32: number; changed: boolean }[],
     encoding: Encoding
   ): Promise<FrameOut> {
+    const mergedRects = this._mergeChangedTiles(tiles, rgba.width, rgba.height);
+
     const out: Rect[] = [];
-    for (const t of tiles) {
-      if (!t.changed) continue;
-      const raw = this._extractRaw(rgba, t.x, t.y, t.w, t.h);
-      const data = await this._encode(raw, t.w, t.h, encoding);
-      out.push({ x: t.x, y: t.y, w: t.w, h: t.h, data });
-      this._prev![t.idx] = t.h32;
+    for (const r of mergedRects) {
+      const raw = this._extractRaw(rgba, r.x, r.y, r.w, r.h);
+      const data = await this._encode(raw, r.w, r.h, encoding);
+      out.push({ ...r, data });
     }
+    for (const t of tiles) if (t.changed) this._prev![t.idx] = t.h32;
+
     return { rects: out, isFullFrame: false, encoding };
   }
 
   private _splitWholeFrame(w: number, h: number, n: number): { x: number; y: number; w: number; h: number }[] {
     if (n <= 1) return [{ x: 0, y: 0, w, h }];
 
-    // pick rows, cols so that rows * cols == n and |rows - cols| is minimal
+    if (n === 2) {
+      const h1 = Math.floor(h / 2);
+      const h2 = h - h1;
+      return [
+        { x: 0, y: 0, w, h: h1 },
+        { x: 0, y: h1, w, h: h2 },
+      ];
+    }
+
     let rows = Math.floor(Math.sqrt(n));
     while (rows > 1 && (n % rows !== 0)) rows--;
-    const cols = Math.floor(n / rows); // exact factor, rows*cols === n
+    const cols = Math.floor(n / rows);
 
-    const rects: { x: number; y: number; w: number; h: number }[] = [];
-
-    // helper to get exact integer splits that sum to dimension
     const split = (size: number, parts: number): number[] => {
       const out: number[] = [];
       let prev = 0;
@@ -134,14 +151,108 @@ export class FrameProcessor {
     const widths = split(w, cols);
     const heights = split(h, rows);
 
+    const rects: { x: number; y: number; w: number; h: number }[] = [];
+    let yAcc = 0;
+    for (let r = 0; r < rows; r++) {
+      let xAcc = 0;
+      for (let c = 0; c < cols; c++) {
+        rects.push({ x: xAcc, y: yAcc, w: widths[c], h: heights[r] });
+        xAcc += widths[c];
+      }
+      yAcc += heights[r];
+    }
+    return rects;
+  }
+
+  private _getMaxFullTileSize(frameW: number, frameH: number): { maxW: number; maxH: number } {
+    const fullRects = this._splitWholeFrame(frameW, frameH, this._cfg.fullframeTileCount);
+    let maxW = 0, maxH = 0;
+    for (const r of fullRects) {
+      if (r.w > maxW) maxW = r.w;
+      if (r.h > maxH) maxH = r.h;
+    }
+    return { maxW, maxH };
+  }
+
+  private _calcGridSplits(frameW: number, frameH: number) {
+    const cols = this._cols, rows = this._rows, ts = this._cfg.tileSize;
+    const widths: number[] = new Array(cols);
+    const heights: number[] = new Array(rows);
+    const xOffsets: number[] = new Array(cols);
+    const yOffsets: number[] = new Array(rows);
+
+    let x = 0;
+    for (let c = 0; c < cols; c++) {
+      const w = Math.min(ts, frameW - x);
+      widths[c] = w;
+      xOffsets[c] = x;
+      x += w;
+    }
     let y = 0;
     for (let r = 0; r < rows; r++) {
-      let x = 0;
+      const h = Math.min(ts, frameH - y);
+      heights[r] = h;
+      yOffsets[r] = y;
+      y += h;
+    }
+    return { widths, heights, xOffsets, yOffsets };
+  }
+
+  private _mergeChangedTiles(
+    tiles: { x: number; y: number; w: number; h: number; idx: number; h32: number; changed: boolean }[],
+    frameW: number,
+    frameH: number
+  ): { x: number; y: number; w: number; h: number }[] {
+    const cols = this._cols, rows = this._rows;
+    const changed: boolean[][] = Array.from({ length: rows }, () => Array<boolean>(cols).fill(false));
+    const visited: boolean[][] = Array.from({ length: rows }, () => Array<boolean>(cols).fill(false));
+
+    for (let i = 0; i < tiles.length; i++) {
+      const ty = Math.floor(i / cols);
+      const tx = i % cols;
+      changed[ty][tx] = tiles[i].changed;
+    }
+
+    const { widths, heights, xOffsets, yOffsets } = this._calcGridSplits(frameW, frameH);
+    const { maxW, maxH } = this._getMaxFullTileSize(frameW, frameH);
+
+    const rects: { x: number; y: number; w: number; h: number }[] = [];
+
+    for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        rects.push({ x, y, w: widths[c], h: heights[r] });
-        x += widths[c];
+        if (!changed[r][c] || visited[r][c]) continue;
+
+        // grow horizontally
+        let wTiles = 0, pxW = 0;
+        while (c + wTiles < cols && changed[r][c + wTiles] && !visited[r][c + wTiles]) {
+          const nextW = pxW + widths[c + wTiles];
+          if (nextW > maxW) break;
+          pxW = nextW;
+          wTiles++;
+        }
+
+        // grow vertically
+        let hTiles = 1, pxH = heights[r];
+        let canGrow = true;
+        while (canGrow && (r + hTiles) < rows) {
+          const nextH = pxH + heights[r + hTiles];
+          if (nextH > maxH) break;
+          for (let cc = c; cc < c + wTiles; cc++) {
+            if (!changed[r + hTiles][cc] || visited[r + hTiles][cc]) { canGrow = false; break; }
+          }
+          if (!canGrow) break;
+          pxH = nextH;
+          hTiles++;
+        }
+
+        rects.push({ x: xOffsets[c], y: yOffsets[r], w: pxW, h: pxH });
+
+        for (let rr = r; rr < r + hTiles; rr++) {
+          for (let cc = c; cc < c + wTiles; cc++) {
+            visited[rr][cc] = true;
+          }
+        }
       }
-      y += heights[r];
     }
 
     return rects;

@@ -1,4 +1,5 @@
 export const FRAM_MAGIC = "FRAM";
+export const FPST_MAGIC = "FPST";
 export const FRAM_VERSION = 1 as const;
 export const FLAG_LAST_OF_FRAME = 1 << 0;
 export const FLAG_IS_FULL_FRAME = 1 << 1;
@@ -56,6 +57,13 @@ export function parseTouchPacket(buf: Buffer): TouchPacket | null {
   return { kind, x, y };
 }
 
+export function parseFpsPacket(buf: Buffer): number | null {
+  if (!Buffer.isBuffer(buf) || buf.length < 5) return null;
+  if (buf.readUInt32BE(0) !== 0x46505354) return null; // 'FPST'
+
+  return buf.readUInt16LE(4);
+}
+
 export function buildFramPacket(rects: Rect[], enc: Encoding, frameId: number, flags = 0): Buffer {
   const count = rects.length;
   const parts: Buffer[] = [];
@@ -106,4 +114,11 @@ export function buildFramPackets(rects: Rect[], enc: Encoding, frameId: number, 
     packets.push(buildFramPacket(chunks[i], enc, frameId, flags));
   }
   return packets;
+}
+
+export function buildFpsTestPacket(): Buffer {
+  const data = Buffer.alloc(Buffer.byteLength(FPST_MAGIC) + 1);
+  data.write(FPST_MAGIC, 0);
+  data.writeUInt8(FRAM_VERSION, 4);
+  return data;
 }

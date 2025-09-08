@@ -1,5 +1,5 @@
 import type { DeviceSession } from "./deviceManager.js";
-import { TouchKind, parseTouchPacket } from "./protocol.js";
+import { TouchKind, parseFpsPacket, parseTouchPacket } from "./protocol.js";
 
 export class InputRouter {
   private _lastMoveAt = 0;
@@ -19,47 +19,39 @@ export class InputRouter {
       this._lastMoveAt = now;
     }
 
-    await this._dispatchMouseAsync(dev, pkt.kind, pkt.x, pkt.y);
+    await this._dispatchTouchAsync(dev, pkt.kind, pkt.x, pkt.y);
   }
 
-  private async _dispatchMouseAsync(dev: DeviceSession, kind: TouchKind, x: number, y: number): Promise<void> {
+  public async handleFpsPacketAsync(dev: DeviceSession, buf: Buffer): Promise<void> {
+    const value = parseFpsPacket(buf);
+    dev.fpsTestRunner?.setFrameRenderTimeAsync(value ?? 0, dev.cdp);
+  }
+
+  private async _dispatchTouchAsync(dev: DeviceSession, kind: TouchKind, x: number, y: number): Promise<void> {
     try {
+      const id = 1; // single-finger id
+      const points = [{ x, y, radiusX: 1, radiusY: 1, force: 1, id }];
+
       switch (kind) {
         case TouchKind.Down:
-          await dev.cdp.send("Input.dispatchMouseEvent", {
-            type: "mousePressed",
-            x, y, button: "left", buttons: 1, clickCount: 1,
-          });
+          await dev.cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points });
           break;
 
         case TouchKind.Move:
-          await dev.cdp.send("Input.dispatchMouseEvent", {
-            type: "mouseMoved",
-            x, y, button: "left", buttons: 1, clickCount: 1,
-          });
+          await dev.cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points });
           break;
 
         case TouchKind.Up:
-          await dev.cdp.send("Input.dispatchMouseEvent", {
-            type: "mouseReleased",
-            x, y, button: "left", buttons: 0, clickCount: 1,
-          });
+          await dev.cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
           break;
 
         case TouchKind.Tap:
-          // Simple press+release; works reliably on HA UI
-          await dev.cdp.send("Input.dispatchMouseEvent", {
-            type: "mousePressed",
-            x, y, button: "left", buttons: 1, clickCount: 1,
-          });
-          await dev.cdp.send("Input.dispatchMouseEvent", {
-            type: "mouseReleased",
-            x, y, button: "left", buttons: 0, clickCount: 1,
-          });
+          await dev.cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points });
+          await dev.cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
           break;
       }
-    } catch {
-      // Swallow input errors to avoid breaking the stream
+    } catch (e) {
+      console.warn(`Failed to dispatch touch event: ${(e as Error).message}`);
     }
   }
 }

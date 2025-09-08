@@ -11,7 +11,6 @@ type CdpMsg = {
 type Pending = { resolve: (v: any) => void; reject: (e: any) => void };
 
 class CdpConnection {
-  // Private fields are accessed by session via `any` to keep implementation minimal.
   private ws: WebSocket;
   private seq = 1;
   private pending = new Map<number, Pending>();

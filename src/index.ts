@@ -24,8 +24,13 @@ wss.on("connection", async (ws, req) => {
     if (!isBinary) return;
 
     const buf: Buffer = Buffer.isBuffer(msg) ? msg : Buffer.from(msg as ArrayBuffer);
-    if (buf.length >= 9 && buf.subarray(0, 4).toString("ascii") === "TOUC") {
-      inputRouter.handleTouchPacketAsync(dev, buf).catch(() => { });
+    switch (buf.subarray(0, 4).toString("ascii")) {
+      case "TOUC":
+        inputRouter.handleTouchPacketAsync(dev, buf).catch(e => console.warn(`Failed to handle touch packet: ${(e as Error).message}`));
+        break;
+      case "FPST":
+        inputRouter.handleFpsPacketAsync(dev, buf).catch(() => console.warn(`Failed to handle FPS packet`));
+        break;
     }
   })
 
