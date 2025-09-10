@@ -48,7 +48,7 @@ services:
       DEVICE_MAP_JSON: >
         [
           { "id": "living-room", "url": "fps-test" },
-          { "id": "master-bedroom", "url": "http://172.16.0.252:8123/dashboard-mobile/1" }
+          { "id": "master-bedroom", "url": "http://172.16.0.252:8123/dashboard-mobile/1", "w": 800, "h": 480 }
         ]
     ports:
       - "8081:8081"                   # WebSocket stream
