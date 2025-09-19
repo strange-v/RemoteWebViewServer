@@ -17,7 +17,7 @@ export type TilesCfg = {
   fullframeTileCount: number;
   fullframeAreaThreshold: number;
   jpegQuality: number;
-  fullEvery: number;
+  fullFrameEvery: number;
 };
 
 export class FrameProcessor {
@@ -40,7 +40,7 @@ export class FrameProcessor {
   public async processFrameAsync(rgba: RGBA): Promise<FrameOut> {
     if (!this._prev) this._initGrid(rgba.width, rgba.height);
 
-    let forceFull = (this._iter % this._cfg.fullEvery) === 0;
+    let forceFull = (this._iter % this._cfg.fullFrameEvery) === 0;
     if (this._fullFrameRequested) {
       forceFull = true;
       this._fullFrameRequested = false;

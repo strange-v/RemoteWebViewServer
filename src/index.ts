@@ -1,9 +1,11 @@
 import http from 'http';
 import { WebSocketServer } from "ws"
 import env from "env-var";
+import { makeConfigFromParams, setConfigFor, logDeviceConfig } from "./config.js";
 import { broadcaster, ensureDeviceAsync, cleanupIdleAsync } from './deviceManager.js';
 import { InputRouter } from "./inputRouter.js";
 import { bootstrapAsync } from './browser.js';
+import { MsgType } from './protocol.js';
 
 const WS_PORT = env.get("WS_PORT").default("8081").asIntPositive();
 const HEALTH_PORT = env.get("HEALTH_PORT").default("18080").asIntPositive();
@@ -17,19 +19,26 @@ wss.on("connection", async (ws, req) => {
   const url = new URL(req.url || "", `ws://localhost:${WS_PORT}`);
   const id = url.searchParams.get("id") || "default";
 
+  const cfg = makeConfigFromParams(url.searchParams);
+  setConfigFor(id, cfg);
+  logDeviceConfig(id, cfg);
+
   broadcaster.addClient(id, ws);
-  const dev = await ensureDeviceAsync(id);
+  const dev = await ensureDeviceAsync(id, cfg);
 
   ws.on("message", (msg, isBinary) => {
     if (!isBinary) return;
 
     const buf: Buffer = Buffer.isBuffer(msg) ? msg : Buffer.from(msg as ArrayBuffer);
-    switch (buf.subarray(0, 4).toString("ascii")) {
-      case "TOUC":
+    switch (buf.readUInt8(0)) {
+      case MsgType.Touch:
         inputRouter.handleTouchPacketAsync(dev, buf).catch(e => console.warn(`Failed to handle touch packet: ${(e as Error).message}`));
         break;
-      case "FPST":
-        inputRouter.handleFpsPacketAsync(dev, buf).catch(() => console.warn(`Failed to handle FPS packet`));
+      case MsgType.FrameStats:
+        inputRouter.handleFrameStatsPacketAsync(dev, buf).catch(() => console.warn(`Failed to handle FPS packet`));
+        break;
+      case MsgType.OpenURL:
+        inputRouter.handleOpenURLPacketAsync(dev, buf).catch(e => console.warn(`Failed to handle OpenURL packet: ${(e as Error).message}`));
         break;
     }
   })

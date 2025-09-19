@@ -1,5 +1,5 @@
 import type { DeviceSession } from "./deviceManager.js";
-import { TouchKind, parseFpsPacket, parseTouchPacket } from "./protocol.js";
+import { TouchKind, parseFrameStatsPacket, parseOpenURLPacket, parseTouchPacket } from "./protocol.js";
 
 export class InputRouter {
   private _lastMoveAt = 0;
@@ -22,9 +22,16 @@ export class InputRouter {
     await this._dispatchTouchAsync(dev, pkt.kind, pkt.x, pkt.y);
   }
 
-  public async handleFpsPacketAsync(dev: DeviceSession, buf: Buffer): Promise<void> {
-    const value = parseFpsPacket(buf);
+  public async handleFrameStatsPacketAsync(dev: DeviceSession, buf: Buffer): Promise<void> {
+    const value = parseFrameStatsPacket(buf);
     dev.fpsTestRunner?.setFrameRenderTimeAsync(value ?? 0, dev.cdp);
+  }
+
+  public async handleOpenURLPacketAsync(dev: DeviceSession, buf: Buffer): Promise<void> {
+    const pkt = parseOpenURLPacket(buf);
+      if (!pkt) return;
+    
+    await dev.cdp.send('Page.navigate', { url: pkt.url });
   }
 
   private async _dispatchTouchAsync(dev: DeviceSession, kind: TouchKind, x: number, y: number): Promise<void> {

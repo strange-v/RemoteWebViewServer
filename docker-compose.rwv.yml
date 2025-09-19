@@ -5,25 +5,20 @@ services:
     container_name: remote-webview-server
     restart: unless-stopped
     environment:
-      DEFAULT_VIEWPORT_W: 480
-      DEFAULT_VIEWPORT_H: 480
+      SCREEN_H: 480
+      SCREEN_W: 480
       TILE_SIZE: 32
-      FULLFRAME_TILE_COUNT: 2
-      FULLFRAME_AREA_THRESHOLD: 0.5
-      FULLFRAME_EVERY: 50
+      FULL_FRAME_TILE_COUNT: 1
+      FULL_FRAME_AREA_THRESHOLD: 0.5
+      FULL_FRAME_EVERY: 50
       EVERY_NTH_FRAME: 1
-      MIN_FRAME_INTERVAL_MS: 80
+      MIN_FRAME_INTERVAL_MS: 50
       JPEG_QUALITY: 85
-      MAX_BYTES_PER_WS_MSG: 14336
+      MAX_BYTES_PER_MESSAGE: 14336
       WS_PORT: 8081
       DEBUG_PORT: 9221 # internal debug port
       HEALTH_PORT: 18080
       USER_DATA_DIR: /pw-data
-      DEVICE_MAP_JSON: >
-        [
-          { "id": "living-room", "url": "http://172.16.0.252:8123/dashboard-mobile/0" },
-          { "id": "master-bedroom", "url": "http://172.16.0.252:8123/dashboard-mobile/1" }
-        ]
     ports:
       - "8081:8081"
       - "9222:9222"

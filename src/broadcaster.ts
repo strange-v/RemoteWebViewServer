@@ -1,5 +1,5 @@
 import type { WebSocket } from "ws";
-import { buildFpsTestPacket, buildFramPackets } from "./protocol.js";
+import { buildFrameStatsPacket, buildFramePackets } from "./protocol.js";
 import { FrameOut } from "./frameProcessor.js";
 
 type OutFrame = { frameId: number; packets: Buffer[] };
@@ -36,7 +36,7 @@ export class DeviceBroadcaster {
     const peers = this._clients.get(id);
     if (!peers || peers.size === 0 || data.rects.length === 0) return;
 
-    const packets = buildFramPackets(
+    const packets = buildFramePackets(
       data.rects,
       data.encoding,
       frameId,
@@ -53,7 +53,7 @@ export class DeviceBroadcaster {
     const peers = this._clients.get(id);
     if (!peers || peers.size === 0) return;
 
-    const packet = buildFpsTestPacket();
+    const packet = buildFrameStatsPacket();
     const st = this._ensureState(id);
     st.queue.push({ frameId: 0, packets: [packet] });
 
