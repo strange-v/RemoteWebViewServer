@@ -24,14 +24,19 @@ export class InputRouter {
 
   public async handleFrameStatsPacketAsync(dev: DeviceSession, buf: Buffer): Promise<void> {
     const value = parseFrameStatsPacket(buf);
-    dev.fpsTestRunner?.setFrameRenderTimeAsync(value ?? 0, dev.cdp);
+    dev.selfTestRunner?.setFrameRenderTimeAsync(value ?? 0, dev.cdp);
   }
 
   public async handleOpenURLPacketAsync(dev: DeviceSession, buf: Buffer): Promise<void> {
     const pkt = parseOpenURLPacket(buf);
       if (!pkt) return;
-    
-    await dev.cdp.send('Page.navigate', { url: pkt.url });
+
+      if (pkt.url === "self-test") {
+        await dev.selfTestRunner.startAsync(dev.deviceId, dev.cdp);
+      } else {
+        dev.selfTestRunner.stop();
+        await dev.cdp.send('Page.navigate', { url: pkt.url });
+      }
   }
 
   private async _dispatchTouchAsync(dev: DeviceSession, kind: TouchKind, x: number, y: number): Promise<void> {

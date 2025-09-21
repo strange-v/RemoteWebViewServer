@@ -6,10 +6,11 @@ import { FrameProcessor } from "./frameProcessor.js";
 import { DeviceBroadcaster } from "./broadcaster.js";
 import { installAntiAnimCSSAsync } from "./antiAnim.js";
 import { hash32 } from "./util.js";
-import { FpsTestRunner } from "./fpsTest.js";
+import { SelfTestRunner } from "./selfTest.js";
 
 export type DeviceSession = {
   id: string;
+  deviceId: string;
   cdp: CDPSession;
   cfg: DeviceConfig;
   url: string;
@@ -17,7 +18,7 @@ export type DeviceSession = {
   frameId: number;
   prevFrameHash: number;
   processor: FrameProcessor;
-  fpsTestRunner?: FpsTestRunner
+  selfTestRunner: SelfTestRunner
 
   // trailing throttle state
   pendingB64?: string;
@@ -37,8 +38,6 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
     if (deviceConfigsEqual(device.cfg, cfg)) {
       device.lastActive = Date.now();
       device.processor.requestFullFrame();
-      // if (device.url === "fps-test")
-      //   await device.fpsTestRunner?.startAsync(id, device.cdp, broadcaster);
       return device;
     } else {
       console.log(`[device] Reconfiguring device ${id}`);
@@ -67,14 +66,6 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
   });
   await installAntiAnimCSSAsync(session);
 
-  // let fpsTestRunner: FpsTestRunner | undefined;
-  // if (cfg.url === "fps-test") {
-  //   fpsTestRunner = new FpsTestRunner();
-  //   await fpsTestRunner.startAsync(id, session, broadcaster);
-  // } else {
-  //   await session.send('Page.navigate', { url: cfg.url });
-  // }
-
   await session.send('Page.startScreencast', {
     format: 'png',
     maxWidth: cfg.width,
@@ -88,10 +79,12 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
     fullframeAreaThreshold: cfg.fullFrameAreaThreshold,
     jpegQuality: cfg.jpegQuality,
     fullFrameEvery: cfg.fullFrameEvery,
+    maxBytesPerMessage: cfg.maxBytesPerMessage,
   });
 
   const newDevice: DeviceSession = {
     id: targetId,
+    deviceId: id,
     cdp: session,
     cfg: cfg,
     url: '',
@@ -99,6 +92,7 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
     frameId: 0,
     prevFrameHash: 0,
     processor,
+    selfTestRunner: new SelfTestRunner(broadcaster),
     pendingB64: undefined,
     throttleTimer: undefined,
     lastProcessedMs: undefined,

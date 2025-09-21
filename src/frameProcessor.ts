@@ -1,5 +1,5 @@
 import sharp from "sharp";
-import { Encoding } from "./protocol.js";
+import { Encoding, FRAME_HEADER_BYTES, TILE_HEADER_BYTES } from "./protocol.js";
 import { hash32 } from "./util.js";
 
 export type RGBA = { data: Buffer; width: number; height: number };
@@ -12,23 +12,24 @@ export type FrameOut = {
   encoding: Encoding;
 };
 
-export type TilesCfg = {
+export type FrameProcessorCfg = {
   tileSize: number;
   fullframeTileCount: number;
   fullframeAreaThreshold: number;
   jpegQuality: number;
   fullFrameEvery: number;
+  maxBytesPerMessage: number;
 };
 
 export class FrameProcessor {
-  private _cfg: TilesCfg;
+  private _cfg: FrameProcessorCfg;
   private _cols = 0;
   private _rows = 0;
   private _prev?: Uint32Array;
   private _iter = 0;
   private _fullFrameRequested = false;
 
-  constructor(cfg: TilesCfg) {
+  constructor(cfg: FrameProcessorCfg) {
     this._cfg = cfg;
   }
 
@@ -78,6 +79,15 @@ export class FrameProcessor {
       out = await this._processFullFrame(rgba, tiles, chosenEncoding);
     } else {
       out = await this._processPartialFrame(rgba, tiles, chosenEncoding);
+    }
+
+    const maxBytesPerTile = this._cfg.maxBytesPerMessage - FRAME_HEADER_BYTES - TILE_HEADER_BYTES;
+    for (let i = 0; i < out.rects.length; i++) {
+      const r = out.rects[i];
+      if (r.data.length > maxBytesPerTile) {
+        const redData = await this._makeRedFrameAsync(r.w, r.h, chosenEncoding);
+        out.rects[i] = { x: r.x, y: r.y, w: r.w, h: r.h, data: redData };
+      }
     }
 
     this._iter++;
@@ -302,5 +312,13 @@ export class FrameProcessor {
       out[i * 2 + 1] = (v >> 8) & 0xFF;
     }
     return out;
+  }
+
+  private async _makeRedFrameAsync(w: number, h: number, enc: Encoding): Promise<Buffer> {
+    const raw = Buffer.allocUnsafe(w * h * 4);
+    const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+    const RGBA_RED = 0xFF0000FF; // bytes: FF 00 00 FF
+    for (let o = 0; o < raw.length; o += 4) view.setUint32(o, RGBA_RED, true);
+    return this._encode(raw, w, h, enc);
   }
 }

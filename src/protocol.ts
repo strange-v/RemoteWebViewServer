@@ -15,28 +15,28 @@
 export const PROTOCOL_VERSION = 1 as const;
 
 export enum MsgType {
-  Unknown = 0,
-  Frame = 1,
-  Touch = 2,
-  FrameStats = 3,
-  OpenURL = 4,
+  Unknown     = 0,
+  Frame       = 1,
+  Touch       = 2,
+  FrameStats  = 3,
+  OpenURL     = 4,
 }
 
 export enum Encoding {
-  UNKNOWN   = 0,
-  PNG       = 1,
-  JPEG      = 2,
-  RAW565    = 3,
-  RAW565_RLE= 4,
-  RAW565_LZ4= 5
+  UNKNOWN     = 0,
+  PNG         = 1,
+  JPEG        = 2,
+  RAW565      = 3,
+  RAW565_RLE  = 4,
+  RAW565_LZ4  = 5
 }
 
 export enum TouchKind {
-  Unknown   = 0,
-  Down      = 1,
-  Move      = 2,
-  Up        = 3,
-  Tap       = 4,
+  Unknown     = 0,
+  Down        = 1,
+  Move        = 2,
+  Up          = 3,
+  Tap         = 4,
 }
 
 export const FLAG_LAST_OF_FRAME = 1 << 0;
@@ -67,8 +67,8 @@ export interface TouchPacket {
 export const FRAME_HEADER_BYTES = 1 + 1 + 4 + 1 + 2 + 2;  // 11
 export const TILE_HEADER_BYTES  = 2 + 2 + 2 + 2 + 4;      // 12
 export const TOUCH_BYTES        = 1 + 1 + 1 + 1 + 2 + 2;  // 8
-export const FRAME_STATS_BYTES  = 1 + 1 + 2;              // 4
-export const OPENURL_HEADER_BYTES = 1 + 1 + 2 + 4;
+export const FRAME_STATS_BYTES  = 1 + 1 + 4 + 4;          // 10
+export const OPENURL_HEADER_BYTES = 1 + 1 + 2 + 4;        // 8
 
 const clampU16 = (v: number) => (v < 0 ? 0 : v > 0xffff ? 0xffff : v|0);
 
@@ -103,7 +103,7 @@ export function parseFrameStatsPacket(buf: Buffer): number | null {
   if (buf.readUInt8(0) !== MsgType.FrameStats) return null;
   if (buf.readUInt8(1) !== PROTOCOL_VERSION) return null;
 
-  return buf.readUInt16LE(2);
+  return buf.readUInt32LE(2);
 }
 
 export function parseOpenURLPacket(buf: Buffer): { flags: number; url: string } | null {
@@ -125,7 +125,8 @@ export function buildFrameStatsPacket(): Buffer {
   
   data.writeUInt8(MsgType.FrameStats, 0);
   data.writeUInt8(PROTOCOL_VERSION, 1);
-  data.writeUInt16LE(0, 2);
+  data.writeUInt32LE(0, 2);
+  data.writeUInt32LE(0, 6);
   
   return data;
 }

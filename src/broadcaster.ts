@@ -14,9 +14,14 @@ export class DeviceBroadcaster {
   private _state = new Map<string, BroadcasterState>();
 
   addClient(id: string, ws: WebSocket): void {
-    if (!this._clients.has(id)) this._clients.set(id, new Set());
+    if (!this._clients.has(id))
+      this._clients.set(id, new Set());
     this._clients.get(id)!.add(ws);
-    if (!this._state.has(id)) this._state.set(id, { queue: [], sending: false });
+    
+    if (!this._state.has(id))
+      this._state.set(id, { queue: [], sending: false });
+
+    console.log(`[broadcaster] Client connected to device ${id}, total clients: ${this._clients.get(id)?.size}`);
   }
 
   removeClient(id: string, ws: WebSocket): void {
@@ -25,6 +30,7 @@ export class DeviceBroadcaster {
       this._clients.delete(id);
       this._state.delete(id);
     }
+    console.log(`[broadcaster] Client disconnected from device ${id}, total clients: ${this._clients.get(id)?.size ?? 0}`);
   }
 
   public sendFrameChunkedAsync(
@@ -49,19 +55,14 @@ export class DeviceBroadcaster {
     this._drainAsync(id);
   }
 
-  public startFpsMeasurement(id: string): void {
+  public startSelfTestMeasurement(id: string): void {
     const peers = this._clients.get(id);
     if (!peers || peers.size === 0) return;
 
     const packet = buildFrameStatsPacket();
     const st = this._ensureState(id);
-    st.queue.push({ frameId: 0, packets: [packet] });
-
+    st.queue.push({ frameId: 42, packets: [packet] });
     this._drainAsync(id);
-  }
-
-  public getPeers(id: string): Set<WebSocket> {
-    return this._clients.get(id) ?? new Set();
   }
 
   private _ensureState(id: string): BroadcasterState {

@@ -20,7 +20,7 @@ WORKDIR /app
 
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY fps-test ./fps-test
+COPY self-test ./self-test
 
 EXPOSE 8080 8081 9221
 CMD ["node", "dist/index.js"]
