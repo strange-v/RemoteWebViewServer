@@ -1,3 +1,4 @@
+import { mkdir } from 'fs/promises';
 import { chromium } from 'playwright-core';
 import { initCdpRootAsync, waitForCdpReadyAsync } from './cdpRoot.js';
 
@@ -19,6 +20,8 @@ async function fetchJsonVersionAsync(): Promise<{ webSocketDebuggerUrl: string }
 async function startHeadlessIfNeededAsync(): Promise<void> {
   const info = await fetchJsonVersionAsync();
   if (info?.webSocketDebuggerUrl) return;
+
+  await mkdir(USER_DATA_DIR, { recursive: true });
 
   await chromium.launchPersistentContext(USER_DATA_DIR, {
     headless: true,

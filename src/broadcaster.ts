@@ -1,27 +1,31 @@
-import type { WebSocket } from "ws";
+import { WebSocket } from "ws";
 import { buildFrameStatsPacket, buildFramePackets } from "./protocol.js";
-import { FrameOut } from "./frameProcessor.js";
+import type { FrameOut } from "./frameProcessor.js";
 
 type OutFrame = { frameId: number; packets: Buffer[] };
-
-type BroadcasterState = {
-  queue: OutFrame[];
-  sending: boolean;
-};
+type BroadcasterState = { queue: OutFrame[]; sending: boolean };
 
 export class DeviceBroadcaster {
   private _clients = new Map<string, Set<WebSocket>>();
   private _state = new Map<string, BroadcasterState>();
 
   addClient(id: string, ws: WebSocket): void {
-    if (!this._clients.has(id))
-      this._clients.set(id, new Set());
+    const old = this._clients.get(id);
+    if (old && old.size) {
+      for (const sock of old) {
+        try { sock.close(); } catch {}
+      }
+      old.clear();
+    }
+
+    if (!this._clients.has(id)) this._clients.set(id, new Set());
     this._clients.get(id)!.add(ws);
-    
-    if (!this._state.has(id))
-      this._state.set(id, { queue: [], sending: false });
+
+    if (!this._state.has(id)) this._state.set(id, { queue: [], sending: false });
 
     console.log(`[broadcaster] Client connected to device ${id}, total clients: ${this._clients.get(id)?.size}`);
+    ws.once("close", () => this.removeClient(id, ws));
+    ws.once("error", () => this.removeClient(id, ws));
   }
 
   removeClient(id: string, ws: WebSocket): void {
@@ -33,26 +37,19 @@ export class DeviceBroadcaster {
     console.log(`[broadcaster] Client disconnected from device ${id}, total clients: ${this._clients.get(id)?.size ?? 0}`);
   }
 
-  public sendFrameChunkedAsync(
-    id: string,
-    data: FrameOut,
-    frameId: number,
-    maxBytes = 12_000
-  ): void {
+  getClientCount(id: string): number {
+    return this._clients.get(id)?.size ?? 0;
+  }
+
+  public sendFrameChunked(id: string, data: FrameOut, frameId: number, maxBytes = 12_000): void {
     const peers = this._clients.get(id);
     if (!peers || peers.size === 0 || data.rects.length === 0) return;
 
-    const packets = buildFramePackets(
-      data.rects,
-      data.encoding,
-      frameId,
-      data.isFullFrame,
-      maxBytes
-    );
+    const packets = buildFramePackets(data.rects, data.encoding, frameId, data.isFullFrame, maxBytes);
 
     const st = this._ensureState(id);
     st.queue.push({ frameId, packets });
-    this._drainAsync(id);
+    this._drainAsync(id).catch(() => {});
   }
 
   public startSelfTestMeasurement(id: string): void {
@@ -62,7 +59,7 @@ export class DeviceBroadcaster {
     const packet = buildFrameStatsPacket();
     const st = this._ensureState(id);
     st.queue.push({ frameId: 42, packets: [packet] });
-    this._drainAsync(id);
+    this._drainAsync(id).catch(() => {});
   }
 
   private _ensureState(id: string): BroadcasterState {
@@ -81,30 +78,25 @@ export class DeviceBroadcaster {
 
     try {
       const peers = this._clients.get(id);
-      if (!peers || peers.size === 0) {
-        st.queue.length = 0;
-        return;
-      }
+      if (!peers || peers.size === 0) { st.queue.length = 0; return; }
 
       while (st.queue.length) {
         const f = st.queue.shift()!;
-
         for (const pkt of f.packets) {
           for (const ws of new Set(peers)) {
-            if (ws.readyState !== ws.OPEN) {
+            if (ws.readyState !== WebSocket.OPEN) {
               peers.delete(ws);
               continue;
             }
             try {
               ws.send(pkt, { binary: true });
             } catch {
-              // ignore per-socket send errors
+              // drop on send error
+              try { ws.close(); } catch {}
+              peers.delete(ws);
             }
           }
-          if (peers.size === 0) {
-            st.queue.length = 0;
-            return;
-          }
+          if (peers.size === 0) { st.queue.length = 0; return; }
           await Promise.resolve();
         }
       }

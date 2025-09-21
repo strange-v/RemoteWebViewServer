@@ -11,7 +11,7 @@ const WS_PORT = env.get("WS_PORT").default("8081").asIntPositive();
 const HEALTH_PORT = env.get("HEALTH_PORT").default("18080").asIntPositive();
 
 const wss = new WebSocketServer({ port: WS_PORT, perMessageDeflate: false });
-const inputRouter = new InputRouter(12);
+const inputRouter = new InputRouter();
 
 await bootstrapAsync();
 
@@ -33,6 +33,9 @@ wss.on("connection", async (ws, req) => {
     switch (buf.readUInt8(0)) {
       case MsgType.Touch:
         inputRouter.handleTouchPacketAsync(dev, buf).catch(e => console.warn(`Failed to handle touch packet: ${(e as Error).message}`));
+        break;
+      case MsgType.Keepalive:
+        dev.lastActive = Date.now();
         break;
       case MsgType.FrameStats:
         inputRouter.handleFrameStatsPacketAsync(dev, buf).catch(() => console.warn(`Failed to handle Self test packet`));
@@ -57,6 +60,6 @@ http.createServer(async (req, res) => {
   }
 }).listen(HEALTH_PORT);
 
-// setInterval(() => cleanupIdleAsync(), 60_000);
+setInterval(() => cleanupIdleAsync(), 60_000);
 
 console.log(`[server] WebSocket listening on :${WS_PORT}`);

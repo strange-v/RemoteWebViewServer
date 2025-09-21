@@ -20,6 +20,7 @@ export enum MsgType {
   Touch       = 2,
   FrameStats  = 3,
   OpenURL     = 4,
+  Keepalive   = 5,
 }
 
 export enum Encoding {

@@ -18,6 +18,14 @@ class CdpConnection {
 
   constructor(ws: WebSocket) {
     this.ws = ws;
+    ws.on('close', () => {
+      for (const [, p] of this.pending) p.reject(new Error('CDP closed'));
+      this.pending.clear();
+    });
+    ws.on('error', (err) => {
+      for (const [, p] of this.pending) p.reject(err);
+      this.pending.clear();
+    });
     ws.on('message', (data) => this._onMessage(data));
   }
 

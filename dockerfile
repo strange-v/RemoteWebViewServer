@@ -1,6 +1,8 @@
 FROM mcr.microsoft.com/playwright:v1.55.0-jammy AS deps
 WORKDIR /app
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+  PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+  NODE_OPTIONS="--unhandled-rejections=strict"
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
@@ -24,3 +26,4 @@ COPY self-test ./self-test
 
 EXPOSE 8080 8081 9221
 CMD ["node", "dist/index.js"]
+

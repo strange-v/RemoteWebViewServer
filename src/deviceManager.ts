@@ -122,7 +122,7 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
       const out = await processor.processFrameAsync({ data, width: info.width, height: info.height });
       if (out.rects.length > 0) {
         dev.frameId = (dev.frameId + 1) >>> 0;
-        await broadcaster.sendFrameChunkedAsync(id, out, dev.frameId, cfg.maxBytesPerMessage);
+        broadcaster.sendFrameChunked(id, out, dev.frameId, cfg.maxBytesPerMessage);
       }
     } catch (e) {
       console.warn(`[device] Failed to process frame for ${id}: ${(e as Error).message}`);
@@ -134,6 +134,9 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
   session.on('Page.screencastFrame', async (evt: any) => {
     // ACK immediately to keep producer running
     session.send('Page.screencastFrameAck', { sessionId: evt.sessionId }).catch(() => { });
+
+    if (broadcaster.getClientCount(newDevice.deviceId) === 0)
+      return;
     newDevice.lastActive = Date.now();
     newDevice.pendingB64 = evt.data;
 
