@@ -1,6 +1,6 @@
 # Remote WebView Server
 
-Headless browser that renders target web pages (e.g., Home Assistant dashboards) and streams them as image tiles over WebSocket to lightweight clients (ESP32 displays).
+Headless browser that renders target web pages (e.g., Home Assistant dashboards) and streams them as image tiles over WebSocket to lightweight [clients](https://github.com/strange-v/RemoteWebViewClient) (ESP32 displays).
 
 ![Remote WebView](/images/tiled_preview.png)
 
