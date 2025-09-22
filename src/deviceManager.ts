@@ -27,6 +27,7 @@ export type DeviceSession = {
 };
 
 const devices = new Map<string, DeviceSession>();
+let _cleanupRunning = false;
 export const broadcaster = new DeviceBroadcaster();
 
 export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<DeviceSession> {
@@ -152,23 +153,38 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
 }
 
 export async function cleanupIdleAsync(ttlMs = 5 * 60_000) {
-  const root = getRoot();
-  const now = Date.now();
-  for (const [id, device] of devices) {
-    if (now - device.lastActive > ttlMs) {
+  if (_cleanupRunning) return;
+  _cleanupRunning = true;
+  
+  try {
+    const now = Date.now();
+      const staleIds = Array.from(devices.values())
+      .filter(d => now - d.lastActive > ttlMs)
+      .map(d => d.deviceId);
+
+    for (const id of staleIds) {
+        const dev = devices.get(id);
+      if (!dev) continue;
+
+        devices.delete(id);
+
       console.log(`[device] Cleaning up idle device ${id}`);
-      await deleteDeviceAsync(device);
+      await deleteDeviceAsync(dev).catch(() => { /* swallow */ });
     }
+  } finally {
+    _cleanupRunning = false;
   }
 }
 
 async function deleteDeviceAsync(device: DeviceSession) {
   const root = getRoot();
 
-  try { await root?.send('Target.closeTarget', { targetId: device.id }); } catch { }
+  if (!devices.delete(device.deviceId))
+    return;
 
   if (device.throttleTimer)
     clearTimeout(device.throttleTimer);
 
-  devices.delete(device.id);
+  try { await device.cdp.send("Page.stopScreencast").catch(() => {}); } catch {}
+  try { await root?.send("Target.closeTarget", { targetId: device.id }); } catch {}
 }

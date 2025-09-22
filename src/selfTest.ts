@@ -55,7 +55,9 @@ export class SelfTestRunner {
   }
 
   public stop(): void {
-    console.log(`[Self test] Stopped`);
+    if (this._timeoutId0 || this._timeoutId1 || this._timeoutId2)
+      console.log(`[Self test] Stopped`);
+    
     if (this._timeoutId0) clearTimeout(this._timeoutId0);
     if (this._timeoutId1) clearTimeout(this._timeoutId1);
     if (this._timeoutId2) clearTimeout(this._timeoutId2);
