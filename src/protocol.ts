@@ -11,6 +11,11 @@
 // FrameStats message:
 //   [type u8=3][ver u8=1][frame_render_time_ms u16]
 //
+// OpenURL message:
+//   [type u8=4][ver u8=1][flags u16][url_len u32][url utf8 bytes...]
+// Keepalive message:
+//   [type u8=5][ver u8=1]
+//
 
 export const PROTOCOL_VERSION = 1 as const;
 

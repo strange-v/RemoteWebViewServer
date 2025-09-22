@@ -35,7 +35,9 @@ export class InputRouter {
         await dev.selfTestRunner.startAsync(dev.deviceId, dev.cdp);
       } else {
         dev.selfTestRunner.stop();
-        await dev.cdp.send('Page.navigate', { url: pkt.url });
+        
+        if (dev.url !== pkt.url)
+          await dev.cdp.send('Page.navigate', { url: pkt.url });
       }
   }
 
