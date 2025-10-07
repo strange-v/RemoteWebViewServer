@@ -155,18 +155,16 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
 export async function cleanupIdleAsync(ttlMs = 5 * 60_000) {
   if (_cleanupRunning) return;
   _cleanupRunning = true;
-  
+
   try {
     const now = Date.now();
-      const staleIds = Array.from(devices.values())
+    const staleIds = Array.from(devices.values())
       .filter(d => now - d.lastActive > ttlMs)
       .map(d => d.deviceId);
 
     for (const id of staleIds) {
-        const dev = devices.get(id);
+      const dev = devices.get(id);
       if (!dev) continue;
-
-        devices.delete(id);
 
       console.log(`[device] Cleaning up idle device ${id}`);
       await deleteDeviceAsync(dev).catch(() => { /* swallow */ });
@@ -185,6 +183,6 @@ async function deleteDeviceAsync(device: DeviceSession) {
   if (device.throttleTimer)
     clearTimeout(device.throttleTimer);
 
-  try { await device.cdp.send("Page.stopScreencast").catch(() => {}); } catch {}
-  try { await root?.send("Target.closeTarget", { targetId: device.id }); } catch {}
+  try { await device.cdp.send("Page.stopScreencast").catch(() => { }); } catch { }
+  try { await root?.send("Target.closeTarget", { targetId: device.id }); } catch { }
 }
