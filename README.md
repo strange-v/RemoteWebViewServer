@@ -16,9 +16,14 @@ Headless browser that renders target web pages (e.g., Home Assistant dashboards)
 - No viewers = no work: frames are ACK’d to keep Chromium streaming, but tiles aren’t encoded/queued when there are no listeners.
 - Touch event bridging (down/move/up) — scrolling supported (no gestures yet)
 - Client-driven navigation: the client can control which page to open.
-- Built-in self test page to visualize and measure render time
+- Built-in self-test page to visualize and measure render time
 - Health endpoint for container orchestration
 - Optional DevTools access via TCP proxy
+
+## Accessing the server’s tab with Chrome DevTools
+1. Make sure your server exposes the DevTools (CDP) port (e.g., 9222).
+1. In Chrome, go to chrome://inspect/#devices → Configure… → add your host: hostname_or_ip:9222.
+1. You should see the page the server opened (the one you want to log into, e.g., Home Assistant). Click inspect to open a full DevTools window for that tab.
 
 ## Image Tags & Versioning
 
