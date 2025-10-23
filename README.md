@@ -22,6 +22,8 @@ Headless browser that renders target web pages (e.g., Home Assistant dashboards)
 
 ## Accessing the server’s tab with Chrome DevTools
 1. Make sure your server exposes the DevTools (CDP) port (e.g., 9222).
+   - If you use a pure Docker container, make sure you have configured and started `debug-proxy`
+   - If HA OS addon is used, enable `expose_debug_proxy`
 1. In Chrome, go to chrome://inspect/#devices → Configure… → add your host: hostname_or_ip:9222.
 1. You should see the page the server opened (the one you want to log into, e.g., Home Assistant). Click inspect to open a full DevTools window for that tab.
 
