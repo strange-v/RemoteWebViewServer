@@ -24,6 +24,8 @@ export type DeviceSession = {
   pendingB64?: string;
   throttleTimer?: NodeJS.Timeout;
   lastProcessedMs?: number;
+
+  openURL: (url: string) => Promise<void>;
 };
 
 const devices = new Map<string, DeviceSession>();
@@ -48,8 +50,6 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
 
   const { targetId } = await root.send<{ targetId: string }>('Target.createTarget', {
     url: 'about:blank',
-    width: cfg.width,
-    height: cfg.height,
   });
 
   const { sessionId } = await root.send<{ sessionId: string }>('Target.attachToTarget', {
@@ -57,15 +57,21 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
     flatten: true
   });
   const session = (root as any).session(sessionId);
-
   await session.send('Page.enable');
+  await session.send('Runtime.enable');
+  await session.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 });
   await session.send('Emulation.setDeviceMetricsOverride', {
     width: cfg.width,
     height: cfg.height,
     deviceScaleFactor: 1,
-    mobile: true
+    mobile: false,
+    screenWidth: cfg.width,
+    screenHeight: cfg.height,
+    positionX: 0,
+    positionY: 0,
   });
-  await installAntiAnimCSSAsync(session);
+  await session.send('Emulation.setTouchEmulationEnabled', { enabled: true, configuration: 'mobile' });
+  await session.send('Emulation.setVisibleSize', { width: cfg.width, height: cfg.height, });
 
   await session.send('Page.startScreencast', {
     format: 'png',
@@ -83,6 +89,7 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
     maxBytesPerMessage: cfg.maxBytesPerMessage,
   });
 
+
   const newDevice: DeviceSession = {
     id: targetId,
     deviceId: id,
@@ -97,9 +104,37 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
     pendingB64: undefined,
     throttleTimer: undefined,
     lastProcessedMs: undefined,
+    openURL: async (url: string) => { }
   };
   devices.set(id, newDevice);
   newDevice.processor.requestFullFrame();
+
+  const openURL = async (url: string) => {
+    if (url === "self-test") {
+      await newDevice.selfTestRunner.startAsync(newDevice.deviceId, newDevice.cdp);
+    } else {
+      newDevice.selfTestRunner.stop();
+
+      if (newDevice.url !== url) {
+        await newDevice.cdp.send('Page.navigate', { url });
+      }
+    }
+
+    await new Promise(r => setTimeout(r, 100));
+    await session.send('Emulation.setDeviceMetricsOverride', {
+      width: cfg.width,
+      height: cfg.height,
+      deviceScaleFactor: 1,
+      mobile: false,
+      screenWidth: cfg.width,
+      screenHeight: cfg.height,
+      positionX: 0,
+      positionY: 0,
+    });
+    await session.send('Emulation.setTouchEmulationEnabled', { enabled: true, configuration: 'mobile' });
+    await session.send('Emulation.setVisibleSize', { width: cfg.width, height: cfg.height, });
+  };
+  newDevice.openURL = openURL;
 
   const flushPending = async () => {
     const dev = newDevice;
@@ -120,6 +155,7 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
       dev.prevFrameHash = h32;
 
       const { data, info } = await sharp(pngFull).raw().ensureAlpha().toBuffer({ resolveWithObject: true });
+      console.log(`[device] Got frame ${info.width}x${info.height} (${data.length} bytes) for ${id}`);
       const out = await processor.processFrameAsync({ data, width: info.width, height: info.height });
       if (out.rects.length > 0) {
         dev.frameId = (dev.frameId + 1) >>> 0;

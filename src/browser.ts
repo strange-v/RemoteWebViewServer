@@ -24,6 +24,7 @@ async function startHeadlessIfNeededAsync(): Promise<void> {
   await mkdir(USER_DATA_DIR, { recursive: true });
 
   await chromium.launchPersistentContext(USER_DATA_DIR, {
+    channel: "chrome",
     headless: true,
     args: [
       `--remote-debugging-port=${DEBUG_PORT}`,

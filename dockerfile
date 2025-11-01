@@ -20,6 +20,9 @@ WORKDIR /app
 
 # USER pwuser
 
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npx playwright install --with-deps chrome
+
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY self-test ./self-test
