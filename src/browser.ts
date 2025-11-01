@@ -3,6 +3,7 @@ import { chromium } from 'playwright-core';
 import { initCdpRootAsync, waitForCdpReadyAsync } from './cdpRoot.js';
 
 const DEBUG_PORT = +(process.env.DEBUG_PORT || 9221);
+const PREFERS_REDUCED_MOTION = /^(1|true|yes|on)$/i.test(process.env.PREFERS_REDUCED_MOTION ?? '');
 const USER_DATA_DIR = process.env.USER_DATA_DIR || (process.platform === 'win32'
   ? 'C:\\Temp\\remotewebview-profile'
   : '/var/temp/remotewebview-profile');
@@ -22,15 +23,20 @@ async function startHeadlessIfNeededAsync(): Promise<void> {
   if (info?.webSocketDebuggerUrl) return;
 
   await mkdir(USER_DATA_DIR, { recursive: true });
+  const args = [
+    `--remote-debugging-port=${DEBUG_PORT}`,
+    '--no-sandbox',
+    '--force-device-scale-factor=1',
+    '--headless=new',
+    ...(PREFERS_REDUCED_MOTION ? ['--force-prefers-reduced-motion'] : []),
+  ];
+
+  if (PREFERS_REDUCED_MOTION)
+    console.log('[browser] Launching with prefers-reduced-motion');
 
   await chromium.launchPersistentContext(USER_DATA_DIR, {
     headless: true,
-    args: [
-      `--remote-debugging-port=${DEBUG_PORT}`,
-      '--no-sandbox',
-      '--force-device-scale-factor=1',
-      '--headless=new',
-    ],
+    args,
   });
 
   const t0 = Date.now();

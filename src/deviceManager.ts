@@ -4,7 +4,6 @@ import { DeviceConfig, deviceConfigsEqual } from "./config.js";
 import { getRoot } from "./cdpRoot.js";
 import { FrameProcessor } from "./frameProcessor.js";
 import { DeviceBroadcaster } from "./broadcaster.js";
-import { installAntiAnimCSSAsync } from "./antiAnim.js";
 import { hash32 } from "./util.js";
 import { SelfTestRunner } from "./selfTest.js";
 
@@ -25,6 +24,8 @@ export type DeviceSession = {
   throttleTimer?: NodeJS.Timeout;
   lastProcessedMs?: number;
 };
+
+const PREFERS_REDUCED_MOTION = /^(1|true|yes|on)$/i.test(process.env.PREFERS_REDUCED_MOTION ?? '');
 
 const devices = new Map<string, DeviceSession>();
 let _cleanupRunning = false;
@@ -65,7 +66,12 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
     deviceScaleFactor: 1,
     mobile: true
   });
-  await installAntiAnimCSSAsync(session);
+  if (PREFERS_REDUCED_MOTION) {
+    await session.send('Emulation.setEmulatedMedia', {
+      media: 'screen',
+      features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
+    });
+  }
 
   await session.send('Page.startScreencast', {
     format: 'png',

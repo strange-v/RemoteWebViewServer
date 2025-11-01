@@ -57,6 +57,7 @@ services:
       WS_PORT: 8081
       DEBUG_PORT: 9221 # internal debug port
       HEALTH_PORT: 18080
+      PREFERS_REDUCED_MOTION: false
       USER_DATA_DIR: /pw-data
     ports:
       - "8081:8081"                   # WebSocket stream
