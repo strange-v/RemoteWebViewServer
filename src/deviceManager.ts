@@ -125,7 +125,13 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
       }
       dev.prevFrameHash = h32;
 
-      const { data, info } = await sharp(pngFull).raw().ensureAlpha().toBuffer({ resolveWithObject: true });
+      let img = sharp(pngFull);
+      if (dev.cfg.rotation) img = img.rotate(dev.cfg.rotation);
+
+      const { data, info } = await img
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
       const out = await processor.processFrameAsync({ data, width: info.width, height: info.height });
       if (out.rects.length > 0) {
         dev.frameId = (dev.frameId + 1) >>> 0;

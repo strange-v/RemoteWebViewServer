@@ -1,4 +1,5 @@
 import env from "env-var";
+import { getRotatedDimensions, Rotation } from "./util.js";
 
 export type DeviceConfig = {
   height: number;                   // px
@@ -11,6 +12,7 @@ export type DeviceConfig = {
   minFrameInterval: number;         // ms (>=0)
   jpegQuality: number;              // 1..100
   maxBytesPerMessage: number;       // bytes (>0)
+  rotation: Rotation;               // degrees
 };
 
 const DEFAULTS = {
@@ -22,6 +24,7 @@ const DEFAULTS = {
   minFrameInterval: 80,
   jpegQuality: 85,
   maxBytesPerMessage: 14336,
+  rotation: 0,
 } as const;
 
 const store = new Map<string, DeviceConfig>();
@@ -65,8 +68,6 @@ function readEnvFallbacks(): Partial<DeviceConfig> {
   const val = (name: string) => env.get(name).asString() ?? undefined;
 
   const out: Partial<DeviceConfig> = {};
-  const H = val("SCREEN_H");
-  const W = val("SCREEN_W");
   const TS = val("TILE_SIZE");
   const FFTC = val("FULL_FRAME_TILE_COUNT");
   const FFAT = val("FULL_FRAME_AREA_THRESHOLD");
@@ -76,8 +77,6 @@ function readEnvFallbacks(): Partial<DeviceConfig> {
   const Q = val("JPEG_QUALITY");
   const MBPM = val("MAX_BYTES_PER_MESSAGE");
 
-  if (H) out.height = intPos(H)!;
-  if (W) out.width = intPos(W)!;
   if (TS) out.tileSize = intPos(TS)!;
   if (FFTC) out.fullFrameTileCount = intPos(FFTC)!;
   if (FFAT != null) out.fullFrameAreaThreshold = float01(FFAT)!;
@@ -94,8 +93,8 @@ export function makeConfigFromParams(params: URLSearchParams): DeviceConfig {
   const envFallbacks = readEnvFallbacks();
 
   // required
-  const height = intPos(params.get("h")) ?? envFallbacks.height;
-  const width = intPos(params.get("w")) ?? envFallbacks.width;
+  let height = intPos(params.get("h")) ?? envFallbacks.height;
+  let width = intPos(params.get("w")) ?? envFallbacks.width;
   if (!height || !width) throw new Error(`missing required params "h" and/or "w"`);
 
   // optional
@@ -107,10 +106,14 @@ export function makeConfigFromParams(params: URLSearchParams): DeviceConfig {
   const everyNthFrame = intPos(params.get("enf")) ?? envFallbacks.everyNthFrame ?? DEFAULTS.everyNthFrame;
   const jpegQuality = clamp(intPos(params.get("q")) ?? envFallbacks.jpegQuality ?? DEFAULTS.jpegQuality, 1, 100);
   const maxBytesPerMessage = intPos(params.get("mbpm")) ?? envFallbacks.maxBytesPerMessage ?? DEFAULTS.maxBytesPerMessage;
+  const rotation = intPos(params.get("r")) as 0 | 90 | 180 | 270 | undefined
+    ?? DEFAULTS.rotation;
+
+  const dimensions = getRotatedDimensions(width, height, rotation);
 
   return {
-    height,
-    width,
+    height: dimensions.height,
+    width: dimensions.width,
     tileSize,
     fullFrameTileCount,
     fullFrameAreaThreshold,
@@ -119,6 +122,7 @@ export function makeConfigFromParams(params: URLSearchParams): DeviceConfig {
     everyNthFrame,
     jpegQuality,
     maxBytesPerMessage,
+    rotation,
   };
 }
 
@@ -137,7 +141,8 @@ export function deviceConfigsEqual(
     a.everyNthFrame === b.everyNthFrame &&
     a.minFrameInterval === b.minFrameInterval &&
     a.jpegQuality === b.jpegQuality &&
-    a.maxBytesPerMessage === b.maxBytesPerMessage
+    a.maxBytesPerMessage === b.maxBytesPerMessage &&
+    a.rotation === b.rotation
   );
 }
 
@@ -153,6 +158,7 @@ export function logDeviceConfig(id: string, cfg: DeviceConfig): void {
     ["minFrameInterval", cfg.minFrameInterval],
     ["jpegQuality", cfg.jpegQuality],
     ["maxBytesPerMessage", cfg.maxBytesPerMessage],
+    ["rotation", cfg.rotation],
   ];
 
   const head = `[client_connect] id=${id}`;

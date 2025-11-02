@@ -1,5 +1,6 @@
 import type { DeviceSession } from "./deviceManager.js";
 import { TouchKind, parseFrameStatsPacket, parseOpenURLPacket, parseTouchPacket } from "./protocol.js";
+import { mapPointForRotation } from "./util.js";
 
 export class InputRouter {
   private _lastMoveAt = 0;
@@ -44,7 +45,12 @@ export class InputRouter {
   private async _dispatchTouchAsync(dev: DeviceSession, kind: TouchKind, x: number, y: number): Promise<void> {
     try {
       const id = 1; // single-finger id
-      const points = [{ x, y, radiusX: 1, radiusY: 1, force: 1, id }];
+      const rotated = mapPointForRotation(
+        x, y,
+        dev.cfg.width, dev.cfg.height,
+        dev.cfg.rotation
+      );
+      const points = [{ x: rotated.x, y: rotated.y, radiusX: 1, radiusY: 1, force: 1, id }];
 
       switch (kind) {
         case TouchKind.Down:
