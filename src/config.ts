@@ -106,7 +106,7 @@ export function makeConfigFromParams(params: URLSearchParams): DeviceConfig {
   const everyNthFrame = intPos(params.get("enf")) ?? envFallbacks.everyNthFrame ?? DEFAULTS.everyNthFrame;
   const jpegQuality = clamp(intPos(params.get("q")) ?? envFallbacks.jpegQuality ?? DEFAULTS.jpegQuality, 1, 100);
   const maxBytesPerMessage = intPos(params.get("mbpm")) ?? envFallbacks.maxBytesPerMessage ?? DEFAULTS.maxBytesPerMessage;
-  const rotation = intPos(params.get("r")) as 0 | 90 | 180 | 270 | undefined
+  const rotation = intNonNeg(params.get("r")) as 0 | 90 | 180 | 270 | undefined
     ?? DEFAULTS.rotation;
 
   const dimensions = getRotatedDimensions(width, height, rotation);
