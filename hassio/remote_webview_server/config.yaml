@@ -1,5 +1,5 @@
 name: "Remote WebView Server"
-version: "1.0.0"
+version: "1.1.1"
 slug: "remote_webview_server"
 description: "Streams your HA dashboard or any website to ESP32-based displays as tiles via WebSocket."
 url: "https://github.com/strange-v/RemoteWebViewServer/tree/main/hassio/remote_webview_server"
