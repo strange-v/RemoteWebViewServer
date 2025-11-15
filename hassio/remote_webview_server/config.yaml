@@ -1,5 +1,5 @@
 name: "Remote WebView Server"
-version: "1.1.1"
+version: "1.1.2"
 slug: "remote_webview_server"
 description: "Streams your HA dashboard or any website to ESP32-based displays as tiles via WebSocket."
 url: "https://github.com/strange-v/RemoteWebViewServer/tree/main/hassio/remote_webview_server"
@@ -22,8 +22,6 @@ map:
     read_only: false
 
 options:
-  screen_w: 480
-  screen_h: 480
   tile_size: 32
   full_frame_tile_count: 4
   full_frame_area_threshold: 0.5
@@ -37,11 +35,10 @@ options:
   expose_debug_proxy: false
   debug_proxy_port: 9222
   health_port: 18080
+  prefers_reduced_motion: false
   user_data_dir: "/pw-data"
 
 schema:
-  screen_w: int
-  screen_h: int
   tile_size: int
   full_frame_tile_count: int
   full_frame_area_threshold: float
@@ -55,4 +52,5 @@ schema:
   expose_debug_proxy: bool
   debug_proxy_port: int
   health_port: int
+  prefers_reduced_motion: bool
   user_data_dir: str
