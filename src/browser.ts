@@ -1,3 +1,4 @@
+import env from "env-var";
 import { mkdir } from 'fs/promises';
 import { chromium } from 'playwright-core';
 import { initCdpRootAsync, waitForCdpReadyAsync } from './cdpRoot.js';
@@ -7,6 +8,7 @@ const PREFERS_REDUCED_MOTION = /^(1|true|yes|on)$/i.test(process.env.PREFERS_RED
 const USER_DATA_DIR = process.env.USER_DATA_DIR || (process.platform === 'win32'
   ? 'C:\\Temp\\remotewebview-profile'
   : '/var/temp/remotewebview-profile');
+const BROWSER_LOCALE = env.get("BROWSER_LOCALE").default("en-US").asString();
 
 async function fetchJsonVersionAsync(): Promise<{ webSocketDebuggerUrl: string } | null> {
   try {
@@ -36,6 +38,7 @@ async function startHeadlessIfNeededAsync(): Promise<void> {
 
   await chromium.launchPersistentContext(USER_DATA_DIR, {
     headless: true,
+    locale: BROWSER_LOCALE,
     args,
   });
 

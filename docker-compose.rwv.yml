@@ -18,6 +18,7 @@ services:
       HEALTH_PORT: 18080
       PREFERS_REDUCED_MOTION: true
       USER_DATA_DIR: /pw-data
+      BROWSER_LOCALE: "en-US"
     ports:
       - "8081:8081"
       - "9222:9222"

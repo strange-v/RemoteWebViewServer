@@ -57,6 +57,7 @@ services:
       HEALTH_PORT: 18080
       PREFERS_REDUCED_MOTION: false
       USER_DATA_DIR: /pw-data
+      BROWSER_LOCALE: "en-US"
     ports:
       - "8081:8081"                   # WebSocket stream
       - "9222:9222"                   # external DevTools via socat
