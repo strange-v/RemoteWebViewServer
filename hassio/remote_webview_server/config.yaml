@@ -37,6 +37,7 @@ options:
   health_port: 18080
   prefers_reduced_motion: false
   user_data_dir: "/pw-data"
+  big_endian: false
 
 schema:
   tile_size: int
