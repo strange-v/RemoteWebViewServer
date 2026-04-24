@@ -12,8 +12,6 @@ get_opt() {
   fi
 }
 
-export SCREEN_W="$(get_opt screen_w 480)"
-export SCREEN_H="$(get_opt screen_h 480)"
 export TILE_SIZE="$(get_opt tile_size 32)"
 export FULL_FRAME_TILE_COUNT="$(get_opt full_frame_tile_count 4)"
 export FULL_FRAME_AREA_THRESHOLD="$(get_opt full_frame_area_threshold 0.5)"
@@ -25,6 +23,7 @@ export MAX_BYTES_PER_MESSAGE="$(get_opt max_bytes_per_message 14336)"
 export WS_PORT="$(get_opt ws_port 8081)"
 export DEBUG_PORT="$(get_opt debug_port 9221)"
 export HEALTH_PORT="$(get_opt health_port 18080)"
+export PREFERS_REDUCED_MOTION="$(get_opt prefers_reduced_motion false)"
 
 USER_DATA_DIR_OPT="$(get_opt user_data_dir "/pw-data")"
 if [ "$USER_DATA_DIR_OPT" = "/pw-data" ]; then

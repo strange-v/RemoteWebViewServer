@@ -16,6 +16,8 @@
 // Keepalive message:
 //   [type u8=5][ver u8=1]
 //
+// Current URL packet:
+//   [type u8][ver u8][len u32][url utf8 bytes...]
 
 export const PROTOCOL_VERSION = 1 as const;
 
@@ -26,6 +28,7 @@ export enum MsgType {
   FrameStats  = 3,
   OpenURL     = 4,
   Keepalive   = 5,
+  CurrentURL  = 6, // <-- Current URL packet
 }
 
 export enum Encoding {
@@ -75,8 +78,20 @@ export const TILE_HEADER_BYTES  = 2 + 2 + 2 + 2 + 4;      // 12
 export const TOUCH_BYTES        = 1 + 1 + 1 + 1 + 2 + 2;  // 8
 export const FRAME_STATS_BYTES  = 1 + 1 + 4 + 4;          // 10
 export const OPENURL_HEADER_BYTES = 1 + 1 + 2 + 4;        // 8
+export const CURRENTURL_HEADER_BYTES = 1 + 1 + 4;         // 6 bytes: [type u8][ver u8][len u32] - Current URL header
 
 const clampU16 = (v: number) => (v < 0 ? 0 : v > 0xffff ? 0xffff : v|0);
+
+// Current URL packet
+export function buildCurrentURLPacket(url: string): Buffer {
+  const urlBuf = Buffer.from(url, "utf8");
+  const buf = Buffer.alloc(CURRENTURL_HEADER_BYTES + urlBuf.length);
+  buf.writeUInt8(MsgType.CurrentURL, 0);
+  buf.writeUInt8(PROTOCOL_VERSION, 1);
+  buf.writeUInt32LE(urlBuf.length, 2);
+  urlBuf.copy(buf, CURRENTURL_HEADER_BYTES);
+  return buf;
+}
 
 export function buildTouchPacket(kind: TouchKind, x: number, y: number, pointerId = 0): Buffer {
   const buf = Buffer.alloc(TOUCH_BYTES);

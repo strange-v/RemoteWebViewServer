@@ -1,8 +1,8 @@
 FROM mcr.microsoft.com/playwright:v1.55.0-jammy AS deps
 WORKDIR /app
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
-  PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
-  NODE_OPTIONS="--unhandled-rejections=strict"
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    NODE_OPTIONS="--unhandled-rejections=strict"
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
@@ -15,15 +15,12 @@ FROM build AS prod-deps
 RUN npm prune --omit=dev
 
 FROM mcr.microsoft.com/playwright:v1.55.0-jammy AS runner
-ENV NODE_ENV=production
 WORKDIR /app
-
-# USER pwuser
-
+ENV NODE_ENV=production \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY self-test ./self-test
-
 EXPOSE 8080 8081 9221
 CMD ["node", "dist/index.js"]
-
