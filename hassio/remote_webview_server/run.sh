@@ -26,6 +26,7 @@ export HEALTH_PORT="$(get_opt health_port 18080)"
 export PREFERS_REDUCED_MOTION="$(get_opt prefers_reduced_motion false)"
 export INJECT_JS_URL="$(get_opt inject_js_url "")"
 export INJECT_JS_ALLOW_HTTP="$(get_opt inject_js_allow_http false)"
+export BROWSER_LOCALE="$(get_opt browser_locale "en-US")"
 
 USER_DATA_DIR_OPT="$(get_opt user_data_dir "/pw-data")"
 if [ "$USER_DATA_DIR_OPT" = "/pw-data" ]; then

@@ -1,0 +1,201 @@
+// Remote WebView binary protocol (v1)
+// Layout (LE unless stated otherwise):
+// Frame message:
+//   [type u8=1][ver u8=1][frame_id u32][enc u8][tile_count u16][flags u16]
+//   followed by `tile_count` tiles, each:
+//   [x u16][y u16][w u16][h u16][data_len u32][data bytes...]
+//
+// Touch message:
+//   [type u8=2][ver u8=1][subtype u8][pointer_id u8][x u16][y u16]
+//
+// FrameStats message:
+//   [type u8=3][ver u8=1][frame_render_time_ms u16]
+//
+// OpenURL message:
+//   [type u8=4][ver u8=1][flags u16][url_len u32][url utf8 bytes...]
+// Keepalive message:
+//   [type u8=5][ver u8=1]
+//
+// Current URL packet:
+//   [type u8][ver u8][len u32][url utf8 bytes...]
+export const PROTOCOL_VERSION = 1;
+export var MsgType;
+(function (MsgType) {
+    MsgType[MsgType["Unknown"] = 0] = "Unknown";
+    MsgType[MsgType["Frame"] = 1] = "Frame";
+    MsgType[MsgType["Touch"] = 2] = "Touch";
+    MsgType[MsgType["FrameStats"] = 3] = "FrameStats";
+    MsgType[MsgType["OpenURL"] = 4] = "OpenURL";
+    MsgType[MsgType["Keepalive"] = 5] = "Keepalive";
+    MsgType[MsgType["CurrentURL"] = 6] = "CurrentURL";
+})(MsgType || (MsgType = {}));
+export var Encoding;
+(function (Encoding) {
+    Encoding[Encoding["UNKNOWN"] = 0] = "UNKNOWN";
+    Encoding[Encoding["PNG"] = 1] = "PNG";
+    Encoding[Encoding["JPEG"] = 2] = "JPEG";
+    Encoding[Encoding["RAW565"] = 3] = "RAW565";
+    Encoding[Encoding["RAW565_RLE"] = 4] = "RAW565_RLE";
+    Encoding[Encoding["RAW565_LZ4"] = 5] = "RAW565_LZ4";
+})(Encoding || (Encoding = {}));
+export var TouchKind;
+(function (TouchKind) {
+    TouchKind[TouchKind["Unknown"] = 0] = "Unknown";
+    TouchKind[TouchKind["Down"] = 1] = "Down";
+    TouchKind[TouchKind["Move"] = 2] = "Move";
+    TouchKind[TouchKind["Up"] = 3] = "Up";
+    TouchKind[TouchKind["Tap"] = 4] = "Tap";
+})(TouchKind || (TouchKind = {}));
+export const FLAG_LAST_OF_FRAME = 1 << 0;
+export const FLAG_IS_FULL_FRAME = 1 << 1;
+export const FRAME_HEADER_BYTES = 1 + 1 + 4 + 1 + 2 + 2; // 11
+export const TILE_HEADER_BYTES = 2 + 2 + 2 + 2 + 4; // 12
+export const TOUCH_BYTES = 1 + 1 + 1 + 1 + 2 + 2; // 8
+export const FRAME_STATS_BYTES = 1 + 1 + 4 + 4; // 10
+export const OPENURL_HEADER_BYTES = 1 + 1 + 2 + 4; // 8
+export const CURRENTURL_HEADER_BYTES = 1 + 1 + 4; // 6
+const clampU16 = (v) => (v < 0 ? 0 : v > 0xffff ? 0xffff : v | 0);
+export function buildCurrentURLPacket(url) {
+    const urlBuf = Buffer.from(url, "utf8");
+    const buf = Buffer.alloc(CURRENTURL_HEADER_BYTES + urlBuf.length);
+    buf.writeUInt8(MsgType.CurrentURL, 0);
+    buf.writeUInt8(PROTOCOL_VERSION, 1);
+    buf.writeUInt32LE(urlBuf.length, 2);
+    urlBuf.copy(buf, CURRENTURL_HEADER_BYTES);
+    return buf;
+}
+export function buildTouchPacket(kind, x, y, pointerId = 0) {
+    const buf = Buffer.alloc(TOUCH_BYTES);
+    buf.writeUInt8(MsgType.Touch, 0);
+    buf.writeUInt8(PROTOCOL_VERSION, 1);
+    buf.writeUInt8(kind, 2);
+    buf.writeUInt8(pointerId & 0xff, 3);
+    buf.writeUInt16LE(clampU16(x), 4);
+    buf.writeUInt16LE(clampU16(y), 6);
+    return buf;
+}
+export function parseTouchPacket(buf) {
+    if (!Buffer.isBuffer(buf) || buf.length < TOUCH_BYTES)
+        return null;
+    if (buf.readUInt8(0) !== MsgType.Touch)
+        return null;
+    if (buf.readUInt8(1) !== PROTOCOL_VERSION)
+        return null;
+    const kind = buf.readUInt8(2);
+    if (kind > TouchKind.Up)
+        return null;
+    const pointerId = buf.readUInt8(3);
+    const x = buf.readUInt16LE(4);
+    const y = buf.readUInt16LE(6);
+    return { kind, pointerId, x, y };
+}
+export function parseFrameStatsPacket(buf) {
+    if (!Buffer.isBuffer(buf) || buf.length < FRAME_STATS_BYTES)
+        return null;
+    if (buf.readUInt8(0) !== MsgType.FrameStats)
+        return null;
+    if (buf.readUInt8(1) !== PROTOCOL_VERSION)
+        return null;
+    return buf.readUInt32LE(2);
+}
+export function parseOpenURLPacket(buf) {
+    if (!Buffer.isBuffer(buf) || buf.length < OPENURL_HEADER_BYTES)
+        return null;
+    if (buf.readUInt8(0) !== MsgType.OpenURL)
+        return null;
+    if (buf.readUInt8(1) !== PROTOCOL_VERSION)
+        return null;
+    const flags = buf.readUInt16LE(2);
+    const len = buf.readUInt32LE(4);
+    if (OPENURL_HEADER_BYTES + len > buf.length)
+        return null;
+    const url = buf.subarray(OPENURL_HEADER_BYTES, OPENURL_HEADER_BYTES + len).toString("utf8");
+    return { flags, url };
+}
+export function buildFrameStatsPacket() {
+    const data = Buffer.alloc(FRAME_STATS_BYTES);
+    data.writeUInt8(MsgType.FrameStats, 0);
+    data.writeUInt8(PROTOCOL_VERSION, 1);
+    data.writeUInt32LE(0, 2);
+    data.writeUInt32LE(0, 6);
+    return data;
+}
+export function buildFramePacket(rects, enc, frameId, flags = 0) {
+    const count = rects.length;
+    const header = Buffer.alloc(FRAME_HEADER_BYTES);
+    header.writeUInt8(MsgType.Frame, 0);
+    header.writeUInt8(PROTOCOL_VERSION, 1);
+    header.writeUInt32LE(frameId >>> 0, 2);
+    header.writeUInt8(enc, 6);
+    header.writeUInt16LE(count, 7);
+    header.writeUInt16LE(flags, 9);
+    const parts = [header];
+    for (const r of rects) {
+        const rh = Buffer.alloc(TILE_HEADER_BYTES);
+        rh.writeUInt16LE(r.x, 0);
+        rh.writeUInt16LE(r.y, 2);
+        rh.writeUInt16LE(r.w, 4);
+        rh.writeUInt16LE(r.h, 6);
+        rh.writeUInt32LE(r.data.length >>> 0, 8);
+        parts.push(rh, r.data);
+    }
+    return Buffer.concat(parts);
+}
+export function buildFramePackets(rects, enc, frameId, isFullFrame, maxBytes) {
+    const chunks = [];
+    let cur = [];
+    let curBytes = FRAME_HEADER_BYTES;
+    for (const r of rects) {
+        const rBytes = TILE_HEADER_BYTES + r.data.length;
+        if (cur.length && curBytes + rBytes > maxBytes) {
+            chunks.push(cur);
+            cur = [];
+            curBytes = FRAME_HEADER_BYTES;
+        }
+        cur.push(r);
+        curBytes += rBytes;
+    }
+    if (cur.length)
+        chunks.push(cur);
+    const out = [];
+    for (let i = 0; i < chunks.length; i++) {
+        let flags = (i === chunks.length - 1) ? FLAG_LAST_OF_FRAME : 0;
+        if (isFullFrame)
+            flags |= FLAG_IS_FULL_FRAME;
+        out.push(buildFramePacket(chunks[i], enc, frameId, flags));
+    }
+    return out;
+}
+export function parseFrameHeader(buf) {
+    if (!Buffer.isBuffer(buf) || buf.length < FRAME_HEADER_BYTES)
+        return null;
+    if (buf.readUInt8(0) !== MsgType.Frame)
+        return null;
+    if (buf.readUInt8(1) !== PROTOCOL_VERSION)
+        return null;
+    const frameId = buf.readUInt32LE(2);
+    const enc = buf.readUInt8(6);
+    const tileCount = buf.readUInt16LE(7);
+    const flags = buf.readUInt16LE(9);
+    return { frameId, enc, tileCount, flags, payloadOffset: FRAME_HEADER_BYTES };
+}
+export function* iterateTiles(buf, startOffset = FRAME_HEADER_BYTES, expectedCount) {
+    let off = startOffset >>> 0;
+    let seen = 0;
+    while (off + TILE_HEADER_BYTES <= buf.length) {
+        const x = buf.readUInt16LE(off + 0);
+        const y = buf.readUInt16LE(off + 2);
+        const w = buf.readUInt16LE(off + 4);
+        const h = buf.readUInt16LE(off + 6);
+        const dlen = buf.readUInt32LE(off + 8);
+        off += TILE_HEADER_BYTES;
+        if (off + dlen > buf.length)
+            break;
+        const data = buf.subarray(off, off + dlen);
+        off += dlen;
+        seen++;
+        yield { x, y, w, h, data, nextOffset: off };
+        if (expectedCount && seen >= expectedCount)
+            break;
+    }
+}
