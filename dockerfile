@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/playwright:v1.55.0-jammy AS deps
+FROM mcr.microsoft.com/playwright:v1.62.1-jammy AS deps
 WORKDIR /app
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
@@ -14,7 +14,7 @@ RUN npm run build
 FROM build AS prod-deps
 RUN npm prune --omit=dev
 
-FROM mcr.microsoft.com/playwright:v1.55.0-jammy AS runner
+FROM mcr.microsoft.com/playwright:v1.62.1-jammy AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
