@@ -1,5 +1,5 @@
 import { CDPSession } from "playwright-core";
-import { DeviceBroadcaster } from "./broadcaster";
+import { DeviceBroadcaster } from "./broadcaster.js";
 
 export class SelfTestRunner {
   private _broadcaster: DeviceBroadcaster;
