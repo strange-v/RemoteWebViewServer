@@ -40,6 +40,7 @@ options:
   inject_js_allow_http: false
   user_data_dir: "/pw-data"
   browser_locale: "en-US"
+  max_device_scale_factor: 1
 
 schema:
   tile_size: int
@@ -60,3 +61,4 @@ schema:
   inject_js_allow_http: bool
   user_data_dir: str
   browser_locale: str
+  max_device_scale_factor: "float(1,4)"
