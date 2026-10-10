@@ -25,7 +25,7 @@ export class InputRouter {
 
   public async handleFrameStatsPacketAsync(dev: DeviceSession, buf: Buffer): Promise<void> {
     const value = parseFrameStatsPacket(buf);
-    dev.selfTestRunner?.setFrameRenderTimeAsync(value ?? 0, dev.cdp);
+    await dev.selfTestRunner?.setFrameRenderTimeAsync(value ?? 0, dev.cdp);
   }
 
   public async handleOpenURLPacketAsync(dev: DeviceSession, buf: Buffer): Promise<void> {

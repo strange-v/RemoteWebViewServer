@@ -36,7 +36,23 @@ const devices = new Map<string, DeviceSession>();
 let _cleanupRunning = false;
 export const broadcaster = new DeviceBroadcaster();
 
-export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<DeviceSession> {
+const _pending = new Map<string, Promise<DeviceSession>>();
+
+// Calls for the same id run one after another, so concurrent connections
+// can't both see "no device" and each create a browser tab.
+export function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<DeviceSession> {
+  const prev = _pending.get(id);
+  const next = (prev ?? Promise.resolve())
+    .catch(() => { })
+    .then(() => _ensureDeviceAsync(id, cfg));
+  _pending.set(id, next);
+  next.finally(() => {
+    if (_pending.get(id) === next) _pending.delete(id);
+  }).catch(() => { });
+  return next;
+}
+
+async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<DeviceSession> {
   const root = getRoot();
   if (!root) throw new Error("CDP not ready");
 
@@ -58,37 +74,44 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
     height: cfg.height,
   });
 
-  const { sessionId } = await root.send<{ sessionId: string }>('Target.attachToTarget', {
-    targetId,
-    flatten: true
-  });
-  const session = (root as any).session(sessionId);
-
-  await session.send('Page.enable');
-  await session.send('Emulation.setDeviceMetricsOverride', {
-    width: cfg.width,
-    height: cfg.height,
-    deviceScaleFactor: 1,
-    mobile: true
-  });
-  if (PREFERS_REDUCED_MOTION) {
-    await session.send('Emulation.setEmulatedMedia', {
-      media: 'screen',
-      features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
+  let session: any;
+  try {
+    const { sessionId } = await root.send<{ sessionId: string }>('Target.attachToTarget', {
+      targetId,
+      flatten: true
     });
-  }
+    session = (root as any).session(sessionId);
 
-  const keyboardScript = await getInjectScriptFromUrl(readInjectScriptConfig());
-  if (keyboardScript) {
-    await session.send('Page.addScriptToEvaluateOnNewDocument', { source: keyboardScript });
-  }
+    await session.send('Page.enable');
+    await session.send('Emulation.setDeviceMetricsOverride', {
+      width: cfg.width,
+      height: cfg.height,
+      deviceScaleFactor: 1,
+      mobile: true
+    });
+    if (PREFERS_REDUCED_MOTION) {
+      await session.send('Emulation.setEmulatedMedia', {
+        media: 'screen',
+        features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
+      });
+    }
 
-  await session.send('Page.startScreencast', {
-    format: 'png',
-    maxWidth: cfg.width,
-    maxHeight: cfg.height,
-    everyNthFrame: cfg.everyNthFrame
-  });
+    const keyboardScript = await getInjectScriptFromUrl(readInjectScriptConfig());
+    if (keyboardScript) {
+      await session.send('Page.addScriptToEvaluateOnNewDocument', { source: keyboardScript });
+    }
+
+    await session.send('Page.startScreencast', {
+      format: 'png',
+      maxWidth: cfg.width,
+      maxHeight: cfg.height,
+      everyNthFrame: cfg.everyNthFrame
+    });
+  } catch (e) {
+    // Don't leave a half-configured tab behind.
+    try { await root.send('Target.closeTarget', { targetId }); } catch { }
+    throw e;
+  }
 
   const processor = new FrameProcessor({
     tileSize: cfg.tileSize,
