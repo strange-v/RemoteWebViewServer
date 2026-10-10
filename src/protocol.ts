@@ -9,7 +9,9 @@
 //   [type u8=2][ver u8=1][subtype u8][pointer_id u8][x u16][y u16]
 //
 // FrameStats message:
-//   [type u8=3][ver u8=1][frame_render_time_ms u16]
+//   server -> client: request (payload zeroed)
+//   client -> server: [type u8=3][ver u8=1][avg_frame_render_time_ms u32][bytes u32]
+//   Stats cover the frames since the previous request; the client resets them on reply.
 //
 // OpenURL message:
 //   [type u8=4][ver u8=1][flags u16][url_len u32][url utf8 bytes...]
@@ -124,12 +126,14 @@ export function parseTouchPacket(buf: Buffer): TouchPacket | null {
   return { kind, pointerId, x, y };
 }
 
-export function parseFrameStatsPacket(buf: Buffer): number | null {
+export type ClientFrameStats = { avgRenderMs: number; bytes: number };
+
+export function parseFrameStatsPacket(buf: Buffer): ClientFrameStats | null {
   if (!Buffer.isBuffer(buf) || buf.length < FRAME_STATS_BYTES) return null;
   if (buf.readUInt8(0) !== MsgType.FrameStats) return null;
   if (buf.readUInt8(1) !== PROTOCOL_VERSION) return null;
 
-  return buf.readUInt32LE(2);
+  return { avgRenderMs: buf.readUInt32LE(2), bytes: buf.readUInt32LE(6) };
 }
 
 export function parseOpenURLPacket(buf: Buffer): { flags: number; url: string } | null {

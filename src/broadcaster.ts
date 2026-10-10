@@ -55,25 +55,29 @@ export class DeviceBroadcaster {
     return false;
   }
 
-  public sendFrameChunked(id: string, data: FrameOut, frameId: number, maxBytes = 12_000): void {
+  // Returns the number of bytes queued (0 when there is nobody to send to).
+  public sendFrameChunked(id: string, data: FrameOut, frameId: number, maxBytes = 12_000): number {
     const peers = this._clients.get(id);
-    if (!peers || peers.size === 0 || data.rects.length === 0) return;
+    if (!peers || peers.size === 0 || data.rects.length === 0) return 0;
 
     const packets = buildFramePackets(data.rects, data.encoding, frameId, data.isFullFrame, maxBytes);
 
     const st = this._ensureState(id);
     st.queue.push({ frameId, packets });
     this._drainAsync(id).catch(() => {});
+    return packets.reduce((n, p) => n + p.length, 0);
   }
 
-  public startSelfTestMeasurement(id: string): void {
+  // Asks the client for its render stats since the previous request (it resets them on reply).
+  public requestFrameStats(id: string): boolean {
     const peers = this._clients.get(id);
-    if (!peers || peers.size === 0) return;
+    if (!peers || peers.size === 0) return false;
 
     const packet = buildFrameStatsPacket();
     const st = this._ensureState(id);
     st.queue.push({ packets: [packet] });
     this._drainAsync(id).catch(() => {});
+    return true;
   }
 
   public sendCurrentURL(id: string, url: string): void {

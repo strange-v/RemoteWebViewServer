@@ -24,8 +24,8 @@ export class InputRouter {
   }
 
   public async handleFrameStatsPacketAsync(dev: DeviceSession, buf: Buffer): Promise<void> {
-    const value = parseFrameStatsPacket(buf);
-    await dev.selfTestRunner?.setFrameRenderTimeAsync(value ?? 0, dev.cdp);
+    const stats = parseFrameStatsPacket(buf);
+    if (stats) dev.selfTestRunner.handleClientStats(stats);
   }
 
   public async handleOpenURLPacketAsync(dev: DeviceSession, buf: Buffer): Promise<void> {
@@ -33,7 +33,7 @@ export class InputRouter {
       if (!pkt) return;
 
       if (pkt.url === "self-test") {
-        await dev.selfTestRunner.startAsync(dev.deviceId, dev.cdp);
+        await dev.selfTestRunner.startAsync(dev);
       } else {
         dev.selfTestRunner.stop();
         

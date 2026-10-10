@@ -6,6 +6,7 @@ import { FrameProcessor } from "./frameProcessor.js";
 import { DeviceBroadcaster } from "./broadcaster.js";
 import { SelfTestRunner } from "./selfTest.js";
 import { getInjectScriptFromUrl } from "./scriptLoader.js";
+import { PipelineStats, newPipelineStats } from "./pipelineStats.js";
 
 export type DeviceSession = {
   id: string;
@@ -33,6 +34,11 @@ export type DeviceSession = {
   // last screencast frame, kept to re-send a full frame on request
   lastB64?: string;
   resendFullFrame: () => void;
+
+  stats: PipelineStats;
+  // replaces cfg.minFrameInterval while set (the self-test sends one frame at a time)
+  minFrameIntervalOverride?: number;
+  onFrameSent?: () => void;
 };
 
 const PREFERS_REDUCED_MOTION = /^(1|true|yes|on)$/i.test(process.env.PREFERS_REDUCED_MOTION ?? '');
@@ -190,6 +196,8 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
     processedB64: undefined,
     lastB64: undefined,
     resendFullFrame: () => { },
+    stats: newPipelineStats(),
+    minFrameIntervalOverride: undefined,
   };
   devices.set(id, newDevice);
   newDevice.processor.requestFullFrame();
@@ -216,6 +224,7 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
     // The interval is measured from the start of processing, so minFrameInterval is the
     // frame period rather than an extra pause after each frame.
     dev.lastProcessedMs = Date.now();
+    const t0 = performance.now();
     try {
       dev.processedB64 = b64;
       const pngFull = Buffer.from(b64, 'base64');
@@ -230,7 +239,18 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
       const out = await processor.processFrameAsync({ data, width: info.width, height: info.height });
       if (out.rects.length > 0) {
         dev.frameId = (dev.frameId + 1) >>> 0;
-        broadcaster.sendFrameChunked(id, out, dev.frameId, cfg.maxBytesPerMessage);
+        const procMs = performance.now() - t0;
+        const bytes = broadcaster.sendFrameChunked(id, out, dev.frameId, cfg.maxBytesPerMessage);
+
+        const s = dev.stats;
+        s.framesSent++;
+        if (out.isFullFrame) s.fullFrames++;
+        s.bytesSent += bytes;
+        s.rects += out.rects.length;
+        for (const r of out.rects) s.maxRectBytes = Math.max(s.maxRectBytes, r.data.length);
+        s.procMsTotal += procMs;
+        s.procMsMax = Math.max(s.procMsMax, procMs);
+        if (bytes > 0) dev.onFrameSent?.();
       }
     } catch (e) {
       console.warn(`[device] Failed to process frame for ${id}: ${(e as Error).message}`);
@@ -245,7 +265,8 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
     if (newDevice.throttleTimer || newDevice.processing) return;
     const now = Date.now();
     const since = newDevice.lastProcessedMs ? (now - newDevice.lastProcessedMs) : Infinity;
-    const delay = Math.max(0, cfg.minFrameInterval - (Number.isFinite(since) ? since : 0));
+    const interval = newDevice.minFrameIntervalOverride ?? cfg.minFrameInterval;
+    const delay = Math.max(0, interval - (Number.isFinite(since) ? since : 0));
     newDevice.throttleTimer = setTimeout(flushPending, delay);
   };
 
