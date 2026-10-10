@@ -253,6 +253,7 @@ export class SelfTestRunner {
 
     this._report = buildSelfTestReport(this._results, {
       minFrameInterval: dev.cfg.minFrameInterval,
+      frameAcks: dev.acks.supported,
       maxBytesPerMessage: dev.cfg.maxBytesPerMessage,
       jpegQuality: dev.cfg.jpegQuality,
     });

@@ -7,6 +7,7 @@ import { DeviceBroadcaster } from "./broadcaster.js";
 import { SelfTestRunner } from "./selfTest.js";
 import { getInjectScriptFromUrl } from "./scriptLoader.js";
 import { PipelineStats, newPipelineStats } from "./pipelineStats.js";
+import { FrameAckWindow } from "./frameAckWindow.js";
 
 export type DeviceSession = {
   id: string;
@@ -36,6 +37,10 @@ export type DeviceSession = {
   lastB64?: string;
   resendFullFrame: () => void;
 
+  // frames sent but not acknowledged yet, for clients that send FrameAck
+  acks: FrameAckWindow;
+  handleFrameAck: (frameId: number) => void;
+
   stats: PipelineStats;
   // replaces cfg.minFrameInterval while set (the self-test sends one frame at a time)
   minFrameIntervalOverride?: number;
@@ -46,6 +51,11 @@ export type DeviceSession = {
 const PREFERS_REDUCED_MOTION = /^(1|true|yes|on)$/i.test(process.env.PREFERS_REDUCED_MOTION ?? '');
 
 const CONGESTION_RETRY_MS = 10;
+// Frames in flight to a client that acknowledges them: two let sending the next frame
+// overlap with the device drawing the previous one.
+const ACK_WINDOW_FRAMES = 2;
+// A frame unacknowledged for this long counts as lost.
+const ACK_TIMEOUT_MS = 1000;
 
 const devices = new Map<string, DeviceSession>();
 let _cleanupRunning = false;
@@ -109,6 +119,9 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
   if (device) {
     if (deviceConfigsEqual(device.cfg, cfg)) {
       device.lastActive = Date.now();
+      // A new connection: frames in flight to the old one will never be acknowledged,
+      // and the new client may not send acks at all.
+      device.acks.reset();
       if (device.screencasting) {
         device.resendFullFrame();
       } else {
@@ -198,6 +211,8 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
     processedB64: undefined,
     lastB64: undefined,
     resendFullFrame: () => { },
+    acks: new FrameAckWindow(ACK_WINDOW_FRAMES, ACK_TIMEOUT_MS),
+    handleFrameAck: () => { },
     stats: newPipelineStats(),
     minFrameIntervalOverride: undefined,
   };
@@ -213,6 +228,13 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
       // Keep only the newest frame until the client catches up; the diff is computed
       // against the last frame actually sent, so skipping frames is safe.
       dev.throttleTimer = setTimeout(flushPending, CONGESTION_RETRY_MS);
+      return;
+    }
+    if (dev.acks.isFull(Date.now())) {
+      // Same, but paced by the client's acks; handleFrameAck resumes as soon as one arrives.
+      // The timer only covers a lost ack.
+      const wait = Math.max(0, (dev.acks.timeoutAtMs() ?? Date.now()) - Date.now()) + 1;
+      dev.throttleTimer = setTimeout(flushPending, wait);
       return;
     }
 
@@ -244,6 +266,7 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
         dev.frameId = (dev.frameId + 1) >>> 0;
         const procMs = performance.now() - t0;
         const bytes = broadcaster.sendFrameChunked(id, out, dev.frameId, cfg.maxBytesPerMessage);
+        if (bytes > 0) dev.acks.sent(dev.frameId, Date.now());
 
         const s = dev.stats;
         s.framesSent++;
@@ -275,6 +298,18 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
 
   // Screencast only emits frames when the page changes, so a full-frame request on a
   // static page has to re-process the last frame we received.
+  newDevice.handleFrameAck = (frameId: number) => {
+    const first = !newDevice.acks.supported;
+    const freed = newDevice.acks.ack(frameId);
+    if (first) console.log(`[device] ${id} acknowledges frames: pacing frames to the device`);
+    // Waiting for this ack: process the newest pending frame right away.
+    if (freed && newDevice.pendingB64 && !newDevice.processing && newDevice.throttleTimer) {
+      clearTimeout(newDevice.throttleTimer);
+      newDevice.throttleTimer = undefined;
+      scheduleFlush();
+    }
+  };
+
   newDevice.resendFullFrame = () => {
     newDevice.processor.requestFullFrame();
     newDevice.processedB64 = undefined;

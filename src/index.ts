@@ -6,7 +6,7 @@ import { broadcaster, ensureDeviceAsync, releaseDeviceAsync, getDevice, cleanupI
 import { InputRouter } from "./inputRouter.js";
 import { bootstrapAsync } from './browser.js';
 import { getRoot } from './cdpRoot.js';
-import { MsgType } from './protocol.js';
+import { MsgType, parseFrameAckPacket } from './protocol.js';
 
 const WS_PORT = env.get("WS_PORT").default("8081").asIntPositive();
 const HEALTH_PORT = env.get("HEALTH_PORT").default("18080").asIntPositive();
@@ -44,6 +44,11 @@ function handleMessage(dev: DeviceSession, buf: Buffer): void {
     case MsgType.RequestFullFrame:
       dev.resendFullFrame();
       break;
+    case MsgType.FrameAck: {
+      const frameId = parseFrameAckPacket(buf);
+      if (frameId !== null) dev.handleFrameAck(frameId);
+      break;
+    }
   }
 }
 

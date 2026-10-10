@@ -31,6 +31,7 @@ export type StageResult = {
 
 export type ReportConfig = {
   minFrameInterval: number;
+  frameAcks?: boolean;   // the device acknowledges frames, so the server paces itself to it
   maxBytesPerMessage: number;
   jpegQuality: number;
 };
@@ -214,11 +215,14 @@ export function buildSelfTestReport(results: StageResult[], cfg: ReportConfig): 
   if (bursts.length) {
     // Measured directly: the lowest interval at which the screen keeps up while scrolling.
     const lines = bursts.map(b => `${b.intervalMs} ms: ${b.fps} fps, ${b.timedOut ? "didn't catch up" : `${b.lagMs} ms behind`}`);
-    recs.push(`Scrolling (the whole screen changing for 2 s): ${lines.join("; ")}.`);
+    recs.push(`Scrolling (the whole screen changing for 2 s): ${lines.join("; ")}.` +
+      (cfg.frameAcks ? " The device acknowledges frames, so the server doesn't send more than it can draw." : ""));
     recs.push(recommendedMinFrameIntervalMs !== undefined
       ? `min_frame_interval: ${recommendedMinFrameIntervalMs} ms is the lowest tested value at which the screen keeps up while scrolling` +
         (cfg.minFrameInterval === recommendedMinFrameIntervalMs ? " (your current value)." : ` (now ${cfg.minFrameInterval} ms).`) +
-        ` Lower values make animations smoother but the screen lags behind on full-screen changes.`
+        (cfg.frameAcks
+          ? ` With frame acks a lower value doesn't make the screen lag; it only adds server CPU.`
+          : ` Lower values make animations smoother but the screen lags behind on full-screen changes.`)
       : `The screen lagged behind at every tested min_frame_interval: try ~${Math.round(Math.max(...bursts.map(b => b.intervalMs)) * 1.5)} ms, a lower jpeg_quality (now ${cfg.jpegQuality}) or a smaller decode queue on the device.`);
   } else if (smoothMs !== undefined && noLagMs !== undefined) {
     recs.push(`min_frame_interval: ${smoothMs} ms for smooth animations (the device draws a partial update in ~${(partial ?? small)!.deviceMs} ms), ` +

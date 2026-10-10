@@ -25,6 +25,12 @@
 //   [type u8=7][ver u8=1]
 //   Sent when the client lost or failed to decode part of the stream; the server
 //   re-sends the current page as a full frame.
+//
+// FrameAck message (client -> server, optional):
+//   [type u8=8][ver u8=1][frame_id u32]
+//   Sent after the client has finished a frame (the message with FLAG_LAST_OF_FRAME), whether
+//   or not it could draw it. Cumulative: acknowledges every frame up to frame_id. Once a client
+//   sends acks, the server keeps at most a couple of frames in flight to it.
 
 export const PROTOCOL_VERSION = 1 as const;
 
@@ -37,6 +43,7 @@ export enum MsgType {
   Keepalive        = 5,
   CurrentURL       = 6,
   RequestFullFrame = 7,
+  FrameAck         = 8,
 }
 
 export enum Encoding {
@@ -87,6 +94,7 @@ export const TOUCH_BYTES        = 1 + 1 + 1 + 1 + 2 + 2;  // 8
 export const FRAME_STATS_BYTES  = 1 + 1 + 4 + 4;          // 10
 export const OPENURL_HEADER_BYTES = 1 + 1 + 2 + 4;        // 8
 export const CURRENTURL_HEADER_BYTES = 1 + 1 + 4;         // 6
+export const FRAME_ACK_BYTES    = 1 + 1 + 4;              // 6
 
 const clampU16 = (v: number) => (v < 0 ? 0 : v > 0xffff ? 0xffff : v|0);
 
@@ -148,6 +156,21 @@ export function parseOpenURLPacket(buf: Buffer): { flags: number; url: string } 
   const url = buf.subarray(OPENURL_HEADER_BYTES, OPENURL_HEADER_BYTES + len).toString("utf8");
   
   return { flags, url };
+}
+
+export function buildFrameAckPacket(frameId: number): Buffer {
+  const buf = Buffer.alloc(FRAME_ACK_BYTES);
+  buf.writeUInt8(MsgType.FrameAck, 0);
+  buf.writeUInt8(PROTOCOL_VERSION, 1);
+  buf.writeUInt32LE(frameId >>> 0, 2);
+  return buf;
+}
+
+export function parseFrameAckPacket(buf: Buffer): number | null {
+  if (!Buffer.isBuffer(buf) || buf.length < FRAME_ACK_BYTES) return null;
+  if (buf.readUInt8(0) !== MsgType.FrameAck) return null;
+  if (buf.readUInt8(1) !== PROTOCOL_VERSION) return null;
+  return buf.readUInt32LE(2);
 }
 
 export function buildFrameStatsPacket(): Buffer {

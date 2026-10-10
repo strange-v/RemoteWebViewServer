@@ -22,12 +22,9 @@ Backpressure kicks in late. First the device's decode queue fills (12 messages),
 
 A smaller client queue alone doesn't fix it. With `decode_queue_depth: 4` on an ESP32-S3 (480×480, ~46 ms per full frame), the self-test's scrolling burst at `min_frame_interval: 20` still left the screen 1.1–1.7 s behind: the server sent 68 full frames in 2 s while the device drew ~36, and the ~650 KB in between sat mostly in TCP buffers, far beyond the 4-message queue. At 60 ms it was 0.12–0.2 s behind, at 15 fps instead of 18.
 
-**Frame ack.** After drawing a frame the client sends `FrameAck [type=8][ver][frame_id u32]`, and the server keeps at most 2 frames in flight. Each frame size then finds its own pace, and `min_frame_interval` only caps server CPU. To keep in mind:
-- a window of 2, not 1, so pipeline stages overlap and Wi-Fi latency on acks doesn't lower the frame rate;
-- a ~1 s timeout and a reset on reconnect, so a lost ack can't stall the stream;
-- ack frames the client didn't draw too (dropped or corrupt);
-- send acks on the client without blocking the decode task;
-- fall back to the current behavior for clients that don't send acks.
+**Frame ack — done on the server, the client still has to send it.** The server handles `FrameAck [type=8][ver][frame_id u32]` (cumulative: everything up to `frame_id`) and, once a client acks, keeps at most 2 frames in flight to it, with a 1 s timeout for lost acks and a reset on reconnect. Clients that don't ack work as before. With an emulated ESP (80 ms per full frame), scrolling at 40 ms went from 1.9 s behind to 0.27 s at the same frame rate.
+
+Client side: after finishing the message with `FLAG_LAST_OF_FRAME` (drawn or not), send `FrameAck` with its `frame_id`, using the existing bounded `ws_send_bin_` so the decode task can't block for long. A failed send is fine: the next ack covers it, and the server's timeout covers the rest.
 
 ## Self-test
 
