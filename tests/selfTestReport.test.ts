@@ -69,13 +69,33 @@ describe("buildSelfTestReport", () => {
     expect(burstIntervals([], 80)).toEqual([80]);
   });
 
-  it("recommends the lowest burst interval at which the screen keeps up", () => {
-    // full screen: 120 ms latency, 45 ms on the device -> lagging above 120 + 2 * 45 = 210 ms
+  it("recommends the burst interval with the most frames that keeps up", () => {
+    // full screen: 161 ms latency, 45 ms on the device -> at 20 ms lagging above 161 + 2 * 45 = 251 ms
     const r = buildSelfTestReport([...deviceStages(), burst(20, 60, 700), burst(60, 34, 150), burst(80, 25, 120)], CFG);
     expect(r.bursts.map(b => [b.intervalMs, b.fps, b.lagging])).toEqual([[20, 22.2, true], [60, 15.8, false], [80, 11.8, false]]);
     expect(r.recommendedMinFrameIntervalMs).toBe(60);
     expect(r.recommendations[0]).toContain("20 ms: 22.2 fps, 700 ms behind");
-    expect(r.recommendations[1]).toContain("60 ms is the lowest tested value at which the screen keeps up while scrolling (now 80 ms)");
+    expect(r.recommendations[1]).toContain("60 ms gives the most frames while scrolling (15.8 fps) without the screen lagging behind (now 80 ms)");
+  });
+
+  it("prefers a higher interval when a lower one gave fewer frames", () => {
+    // ESP32-P4 over Ethernet: the device is fast, the server's CPU is shared with the browser
+    const p4 = [
+      stage("small", 5, { browserMs: 13, serverMs: 5, networkMs: 3, deviceMs: 0 }, 1.2),
+      stage("partial", 5, { browserMs: 19, serverMs: 6, networkMs: 4, deviceMs: 5 }, 10.6),
+      stage("full", 5, { browserMs: 21, serverMs: 9, networkMs: 10, deviceMs: 16 }, 30.6),
+    ];
+    const r = buildSelfTestReport([...p4, burst(10, 50, 83), burst(30, 62, 128)], { ...CFG, minFrameInterval: 10, frameAcks: true });
+    // 128 ms behind is below the 150 ms nobody notices: not lagging
+    expect(r.bursts.map(b => b.lagging)).toEqual([false, false]);
+    expect(r.recommendedMinFrameIntervalMs).toBe(30);
+    expect(r.recommendations[1]).toContain("30 ms gives the most frames while scrolling (29.1 fps)");
+    expect(r.recommendations[2]).toContain("A lower interval gave fewer frames (10 ms: 24 fps)");
+  });
+
+  it("prefers the lower interval when the frame rates are about equal", () => {
+    const r = buildSelfTestReport([...deviceStages(), burst(20, 40, 100), burst(60, 41, 100)], { ...CFG, frameAcks: true });
+    expect(r.recommendedMinFrameIntervalMs).toBe(20);
   });
 
   it("says so when the screen lags at every tested interval", () => {
@@ -95,7 +115,7 @@ describe("buildSelfTestReport", () => {
     const st = stage("partial", 4, { browserMs: 20, serverMs: 6, networkMs: 30, deviceMs: 13 }, 8);
     st.steps.push(step({ browserMs: 20, serverMs: 6, networkMs: 250, deviceMs: 13 }));
     const r = buildSelfTestReport([st], CFG);
-    expect(r.recommendations.some(t => t.includes("typical of Wi-Fi power saving"))).toBe(true);
+    expect(r.recommendations.some(t => t.includes("on Wi-Fi is typical of power saving"))).toBe(true);
   });
 
   it("splits the network time into Wi-Fi latency and transfer", () => {
@@ -105,12 +125,12 @@ describe("buildSelfTestReport", () => {
       stage("full", 5, { browserMs: 12, serverMs: 7, networkMs: 93, deviceMs: 45 }, 20.5),
     ], CFG);
     // (93 - 42) / (20.5 - 1.1) = 2.63 ms/KB -> ~380 KB/s; 42 - 2.63 * 1.1 = 39 ms fixed
-    expect(r.wifi).toEqual({ fixedMs: 39, kbPerSec: 380 });
+    expect(r.network).toEqual({ fixedMs: 39, kbPerSec: 380 });
     const small = r.recommendations.find(t => t.startsWith("A small change"))!;
-    expect(small).toContain("~39 ms Wi-Fi latency per update + ~3 ms to transfer");
-    expect(small).toContain("Most of it is latency, not bandwidth: set wifi power_save_mode: none");
+    expect(small).toContain("~39 ms network latency per update + ~3 ms to transfer");
+    expect(small).toContain("Most of it is latency, not bandwidth: on Wi-Fi set power_save_mode: none");
     const full = r.recommendations.find(t => t.startsWith("A full-screen change"))!;
-    expect(full).toContain("~39 ms Wi-Fi latency per update + ~54 ms to transfer ~20.5 KB at ~380 KB/s");
+    expect(full).toContain("~39 ms network latency per update + ~54 ms to transfer ~20.5 KB at ~380 KB/s");
     expect(full).toContain("Most of it is the transfer: lower jpeg_quality");
   });
 

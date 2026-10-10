@@ -63,10 +63,10 @@ export type MinFrameInterval = {
   noLagMs?: number;   // for full-screen updates: no lag while scrolling or switching pages
 };
 
-// The network time split into a fixed delay per update (Wi-Fi latency: radio power saving,
+// The network time split into a fixed delay per update (latency: e.g. Wi-Fi power saving or
 // retries) and a part that grows with the frame size (bandwidth), fitted from the small and
 // the full-screen stage.
-export type WifiEstimate = {
+export type NetworkEstimate = {
   fixedMs: number;
   kbPerSec?: number;
 };
@@ -76,17 +76,17 @@ export type BurstSummary = {
   fps: number;        // frames the device showed per second, until it caught up
   frames: number;
   lagMs: number;      // behind the page at the end of the burst
-  lagging: boolean;   // noticeably more than a single full-screen change takes
+  lagging: boolean;   // noticeably behind: see summarizeBurst
   timedOut: boolean;
 };
 
 export type SelfTestReport = {
   stages: StageSummary[];
   bursts: BurstSummary[];
-  // The lowest burst interval without noticeable lag, when bursts were measured.
+  // The burst interval with the most frames and no noticeable lag, when bursts were measured.
   recommendedMinFrameIntervalMs?: number;
   minFrameInterval: MinFrameInterval;
-  wifi?: WifiEstimate;
+  network?: NetworkEstimate;
   recommendations: string[];
   config: ReportConfig;
 };
@@ -94,6 +94,11 @@ export type SelfTestReport = {
 // Headroom over the device's time per frame: it decodes slower while it is also receiving
 // the next frames, as it does during animations and scrolling.
 const MIN_FRAME_INTERVAL_MARGIN = 1.3;
+
+// A lag at the end of scrolling shorter than this isn't noticeable.
+const UNNOTICEABLE_LAG_MS = 150;
+// Frame rates within this fraction of the best count as equal; the lower interval wins.
+const FPS_TOLERANCE = 0.05;
 
 const round1 = (v: number) => Math.round(v * 10) / 10;
 const roundUp10 = (v: number) => Math.max(10, Math.ceil(v / 10) * 10);
@@ -134,7 +139,7 @@ export function summarizeStage(r: StageResult): StageSummary | undefined {
   };
 }
 
-function estimateWifi(small?: StageSummary, full?: StageSummary): WifiEstimate | undefined {
+function estimateNetwork(small?: StageSummary, full?: StageSummary): NetworkEstimate | undefined {
   if (!small || !full || full.kbPerFrame < 2 * small.kbPerFrame) return undefined;
   const msPerKB = Math.max(0, (full.networkMs - small.networkMs) / (full.kbPerFrame - small.kbPerFrame));
   return {
@@ -143,27 +148,27 @@ function estimateWifi(small?: StageSummary, full?: StageSummary): WifiEstimate |
   };
 }
 
-function networkAdvice(st: StageSummary, wifi: WifiEstimate | undefined, cfg: ReportConfig): string {
-  if (!wifi)
-    return `the network (~${st.networkMs} ms for ~${st.kbPerFrame} KB). Check the Wi-Fi signal and power_save_mode; for large frames a lower jpeg_quality (now ${cfg.jpegQuality}) also helps.`;
+function networkAdvice(st: StageSummary, network: NetworkEstimate | undefined, cfg: ReportConfig): string {
+  if (!network)
+    return `the network (~${st.networkMs} ms for ~${st.kbPerFrame} KB). On Wi-Fi check the signal and power_save_mode; for large frames a lower jpeg_quality (now ${cfg.jpegQuality}) also helps.`;
 
-  const fixedMs = Math.min(wifi.fixedMs, st.networkMs);
+  const fixedMs = Math.min(network.fixedMs, st.networkMs);
   const transferMs = st.networkMs - fixedMs;
-  const rate = wifi.kbPerSec ? ` at ~${wifi.kbPerSec} KB/s` : "";
-  const split = `the network (~${st.networkMs} ms: ~${fixedMs} ms Wi-Fi latency per update + ~${transferMs} ms to transfer ~${st.kbPerFrame} KB${rate}).`;
+  const rate = network.kbPerSec ? ` at ~${network.kbPerSec} KB/s` : "";
+  const split = `the network (~${st.networkMs} ms: ~${fixedMs} ms network latency per update + ~${transferMs} ms to transfer ~${st.kbPerFrame} KB${rate}).`;
   return fixedMs >= transferMs
-    ? `${split} Most of it is latency, not bandwidth: set wifi power_save_mode: none (by default the radio sleeps between updates); a lower jpeg_quality won't help much.`
-    : `${split} Most of it is the transfer: lower jpeg_quality (now ${cfg.jpegQuality}) to shrink frames, or improve the Wi-Fi signal.`;
+    ? `${split} Most of it is latency, not bandwidth: on Wi-Fi set power_save_mode: none (by default the radio sleeps between updates); a lower jpeg_quality won't help much.`
+    : `${split} Most of it is the transfer: lower jpeg_quality (now ${cfg.jpegQuality}) to shrink frames, or improve the connection.`;
 }
 
-function limitAdvice(st: StageSummary, wifi: WifiEstimate | undefined, cfg: ReportConfig): string {
+function limitAdvice(st: StageSummary, network: NetworkEstimate | undefined, cfg: ReportConfig): string {
   switch (st.limit) {
     case "browser":
       return `the browser (~${st.browserMs} ms to render the change and hand over the frame); the server and the device are fast enough.`;
     case "server":
       return `the server CPU (~${st.serverMs} ms per frame). Lower jpeg_quality (now ${cfg.jpegQuality}) or run the server on a faster host.`;
     case "network":
-      return networkAdvice(st, wifi, cfg);
+      return networkAdvice(st, network, cfg);
     case "device":
       return `the display device (~${st.deviceMs} ms to decode and draw). Lowering jpeg_quality (now ${cfg.jpegQuality}) speeds up decoding.`;
   }
@@ -185,9 +190,10 @@ export function burstIntervals(results: StageResult[], configuredMs: number): nu
 function summarizeBurst(r: StageResult, full: StageSummary | undefined): BurstSummary {
   const b = r.burst!;
   const frames = r.server.framesSent;
-  // Falling behind means more than one full-screen change takes on its own, plus a couple of
-  // frames of slack.
-  const allowedMs = (full?.latencyMs ?? 100) + 2 * (full?.deviceMs ?? 50);
+  // Falling behind means more than one full-screen change takes on its own, plus two frame
+  // periods (frames still in flight), and never less than a lag people don't notice.
+  const framePeriodMs = Math.max(b.intervalMs, full?.deviceMs ?? 50);
+  const allowedMs = Math.max(UNNOTICEABLE_LAG_MS, (full?.latencyMs ?? 100) + 2 * framePeriodMs);
   return {
     intervalMs: b.intervalMs,
     fps: round1(frames / (Math.max(b.changesMs + b.lagMs, 1) / 1000)),
@@ -210,20 +216,29 @@ export function buildSelfTestReport(results: StageResult[], cfg: ReportConfig): 
   const { smoothMs, noLagMs } = minFrameInterval;
 
   const bursts = results.filter(r => r.burst).map(r => summarizeBurst(r, full)).sort((a, b) => a.intervalMs - b.intervalMs);
-  const recommendedMinFrameIntervalMs = bursts.find(b => !b.lagging)?.intervalMs;
+  // Among the intervals without lag, the one with the most frames; a lower interval only when
+  // it is about as smooth. A lower interval isn't always smoother: the server shares its CPU
+  // with the browser, so processing more frames can make the browser render fewer.
+  const keepsUp = bursts.filter(b => !b.lagging);
+  const bestFps = Math.max(0, ...keepsUp.map(b => b.fps));
+  const best = keepsUp.find(b => b.fps >= bestFps * (1 - FPS_TOLERANCE));
+  const recommendedMinFrameIntervalMs = best?.intervalMs;
 
   if (bursts.length) {
-    // Measured directly: the lowest interval at which the screen keeps up while scrolling.
+    // Measured directly while scrolling.
     const lines = bursts.map(b => `${b.intervalMs} ms: ${b.fps} fps, ${b.timedOut ? "didn't catch up" : `${b.lagMs} ms behind`}`);
     recs.push(`Scrolling (the whole screen changing for 2 s): ${lines.join("; ")}.` +
       (cfg.frameAcks ? " The device acknowledges frames, so the server doesn't send more than it can draw." : ""));
-    recs.push(recommendedMinFrameIntervalMs !== undefined
-      ? `min_frame_interval: ${recommendedMinFrameIntervalMs} ms is the lowest tested value at which the screen keeps up while scrolling` +
-        (cfg.minFrameInterval === recommendedMinFrameIntervalMs ? " (your current value)." : ` (now ${cfg.minFrameInterval} ms).`) +
-        (cfg.frameAcks
-          ? ` With frame acks a lower value doesn't make the screen lag; it only adds server CPU.`
-          : ` Lower values make animations smoother but the screen lags behind on full-screen changes.`)
-      : `The screen lagged behind at every tested min_frame_interval: try ~${Math.round(Math.max(...bursts.map(b => b.intervalMs)) * 1.5)} ms, a lower jpeg_quality (now ${cfg.jpegQuality}) or a smaller decode queue on the device.`);
+    if (best) {
+      recs.push(`min_frame_interval: ${best.intervalMs} ms gives the most frames while scrolling (${best.fps} fps) without the screen lagging behind` +
+        (cfg.minFrameInterval === best.intervalMs ? " (your current value)." : ` (now ${cfg.minFrameInterval} ms).`) +
+        (cfg.frameAcks ? "" : ` Lower values make the screen lag behind on full-screen changes.`));
+      const slower = bursts.find(b => b.intervalMs < best.intervalMs && b.fps < best.fps * (1 - FPS_TOLERANCE));
+      if (slower)
+        recs.push(`A lower interval gave fewer frames (${slower.intervalMs} ms: ${slower.fps} fps): the server shares its CPU with the browser rendering the page, so processing more frames left it less time to render.`);
+    } else {
+      recs.push(`The screen lagged behind at every tested min_frame_interval: try ~${Math.round(Math.max(...bursts.map(b => b.intervalMs)) * 1.5)} ms, a lower jpeg_quality (now ${cfg.jpegQuality}) or a smaller decode queue on the device.`);
+    }
   } else if (smoothMs !== undefined && noLagMs !== undefined) {
     recs.push(`min_frame_interval: ${smoothMs} ms for smooth animations (the device draws a partial update in ~${(partial ?? small)!.deviceMs} ms), ` +
       `or ${noLagMs} ms so the screen doesn't lag behind when all of it changes, e.g. while scrolling (~${full!.deviceMs} ms per frame). ` +
@@ -241,22 +256,22 @@ export function buildSelfTestReport(results: StageResult[], cfg: ReportConfig): 
     recs.push("No frames were measured: is the device connected and drawing?");
   }
 
-  const wifi = estimateWifi(small, full);
-  if (small) recs.push(`A small change (a sensor value, ~${small.kbPerFrame} KB) appears in ~${small.latencyMs} ms; limited by ${limitAdvice(small, wifi, cfg)}`);
-  if (full) recs.push(`A full-screen change (switching pages, ~${full.kbPerFrame} KB) appears in ~${full.latencyMs} ms; limited by ${limitAdvice(full, wifi, cfg)}`);
+  const network = estimateNetwork(small, full);
+  if (small) recs.push(`A small change (a sensor value, ~${small.kbPerFrame} KB) appears in ~${small.latencyMs} ms; limited by ${limitAdvice(small, network, cfg)}`);
+  if (full) recs.push(`A full-screen change (switching pages, ~${full.kbPerFrame} KB) appears in ~${full.latencyMs} ms; limited by ${limitAdvice(full, network, cfg)}`);
 
   // A max far above the median is usually Wi-Fi: retransmits or the radio's power saving.
   const jittery = stages.find(s => s.latencyMaxMs > 2 * s.latencyMs + 50);
   if (jittery)
     recs.push(`Latency varies a lot (${jittery.label}: median ${jittery.latencyMs} ms, max ${jittery.latencyMaxMs} ms), ` +
-      `which is typical of Wi-Fi power saving or a weak signal.`);
+      `which on Wi-Fi is typical of power saving or a weak signal.`);
 
   const maxTile = cfg.maxBytesPerMessage - FRAME_HEADER_BYTES - TILE_HEADER_BYTES;
   const biggest = Math.max(0, ...results.map(r => r.server.maxRectBytes));
   if (biggest > 0.9 * maxTile)
     recs.push(`Tiles reached the max_bytes_per_msg limit (${round1(biggest / 1024)} of ${round1(maxTile / 1024)} KB) and were split. Raising max_bytes_per_msg, if the device has the memory, reduces per-tile overhead.`);
 
-  return { stages, bursts, recommendedMinFrameIntervalMs, minFrameInterval, wifi, recommendations: recs, config: cfg };
+  return { stages, bursts, recommendedMinFrameIntervalMs, minFrameInterval, network, recommendations: recs, config: cfg };
 }
 
 export function formatReportForLog(report: SelfTestReport): string {
@@ -268,8 +283,8 @@ export function formatReportForLog(report: SelfTestReport): string {
   }
   for (const b of report.bursts)
     lines.push(`  Burst at ${b.intervalMs} ms: ${b.frames} frames, ${b.fps} fps, ${b.timedOut ? "didn't catch up" : `${b.lagMs} ms behind`}${b.lagging ? " (lagging)" : ""}`);
-  if (report.wifi)
-    lines.push(`  Wi-Fi: ~${report.wifi.fixedMs} ms per update + ${report.wifi.kbPerSec ? `~${report.wifi.kbPerSec} KB/s` : "transfer time not measurable"}`);
+  if (report.network)
+    lines.push(`  Network: ~${report.network.fixedMs} ms per update + ${report.network.kbPerSec ? `~${report.network.kbPerSec} KB/s` : "transfer time not measurable"}`);
   for (const r of report.recommendations) lines.push(`  - ${r}`);
   return lines.join("\n");
 }
