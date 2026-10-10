@@ -24,6 +24,7 @@ export type DeviceSession = {
 
   // trailing throttle state
   pendingB64?: string;
+  pendingAtMs?: number; // when the pending frame arrived from the browser
   throttleTimer?: NodeJS.Timeout;
   lastProcessedMs?: number;
   // a frame is being processed; frames are processed one at a time
@@ -38,7 +39,8 @@ export type DeviceSession = {
   stats: PipelineStats;
   // replaces cfg.minFrameInterval while set (the self-test sends one frame at a time)
   minFrameIntervalOverride?: number;
-  onFrameSent?: () => void;
+  // frameAtMs: when the browser delivered the frame; sentAtMs: when it was handed to the socket
+  onFrameSent?: (frameAtMs: number, sentAtMs: number) => void;
 };
 
 const PREFERS_REDUCED_MOTION = /^(1|true|yes|on)$/i.test(process.env.PREFERS_REDUCED_MOTION ?? '');
@@ -215,6 +217,7 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
     }
 
     const b64 = dev.pendingB64;
+    const frameAtMs = dev.pendingAtMs ?? Date.now();
     dev.pendingB64 = undefined;
     if (b64 === dev.processedB64) return;
 
@@ -250,7 +253,7 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
         for (const r of out.rects) s.maxRectBytes = Math.max(s.maxRectBytes, r.data.length);
         s.procMsTotal += procMs;
         s.procMsMax = Math.max(s.procMsMax, procMs);
-        if (bytes > 0) dev.onFrameSent?.();
+        if (bytes > 0) dev.onFrameSent?.(frameAtMs, Date.now());
       }
     } catch (e) {
       console.warn(`[device] Failed to process frame for ${id}: ${(e as Error).message}`);
@@ -275,8 +278,10 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
   newDevice.resendFullFrame = () => {
     newDevice.processor.requestFullFrame();
     newDevice.processedB64 = undefined;
-    if (!newDevice.pendingB64 && newDevice.lastB64)
+    if (!newDevice.pendingB64 && newDevice.lastB64) {
       newDevice.pendingB64 = newDevice.lastB64;
+      newDevice.pendingAtMs = Date.now();
+    }
     if (newDevice.pendingB64)
       scheduleFlush();
   };
@@ -290,6 +295,7 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
       return;
     newDevice.lastActive = Date.now();
     newDevice.pendingB64 = evt.data;
+    newDevice.pendingAtMs = Date.now();
     scheduleFlush();
   });
 

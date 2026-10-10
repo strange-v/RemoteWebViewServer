@@ -1,59 +1,100 @@
 import { describe, it, expect } from "vitest";
-import { buildSelfTestReport, StageResult, ReportConfig } from "../src/selfTestReport.js";
+import { buildSelfTestReport, StageResult, StepResult, ReportConfig } from "../src/selfTestReport.js";
 import { newPipelineStats, PipelineStats } from "../src/pipelineStats.js";
 
 const CFG: ReportConfig = { minFrameInterval: 80, maxBytesPerMessage: 14336, jpegQuality: 85 };
 
-// A stage of `n` identical changes: each took `latencyMs` end to end and `deviceMs` on the device,
-// with `serverMs` of server processing and `kb` per frame.
-function stage(name: string, n: number, latencyMs: number, deviceMs: number, serverMs: number, kb: number, server: Partial<PipelineStats> = {}): StageResult {
+type Parts = Omit<StepResult, "latencyMs">;
+const step = (p: Parts): StepResult => ({ ...p, latencyMs: p.browserMs + p.serverMs + p.networkMs + p.deviceMs });
+
+// A stage of `n` identical changes with the given split of the latency and `kb` per frame.
+function stage(name: string, n: number, p: Parts, kb: number, server: Partial<PipelineStats> = {}): StageResult {
   return {
     name, label: name,
-    steps: Array.from({ length: n }, () => ({ latencyMs, deviceMs })),
-    server: { ...newPipelineStats(), framesSent: n, bytesSent: n * kb * 1024, procMsTotal: n * serverMs, ...server },
+    steps: Array.from({ length: n }, () => step(p)),
+    server: { ...newPipelineStats(), framesSent: n, bytesSent: n * kb * 1024, ...server },
   };
 }
 
 describe("buildSelfTestReport", () => {
-  it("summarizes a stage with medians", () => {
-    const st = stage("small", 3, 0, 0, 5, 1);
-    st.steps = [{ latencyMs: 40, deviceMs: 8 }, { latencyMs: 30, deviceMs: 6 }, { latencyMs: 90, deviceMs: 20 }];
+  it("summarizes a stage with medians of each part", () => {
+    const st = stage("small", 0, { browserMs: 0, serverMs: 0, networkMs: 0, deviceMs: 0 }, 1, { framesSent: 3, bytesSent: 3 * 1024 });
+    st.steps = [
+      step({ browserMs: 30, serverMs: 5, networkMs: 10, deviceMs: 1 }),
+      step({ browserMs: 20, serverMs: 4, networkMs: 8, deviceMs: 1 }),
+      step({ browserMs: 25, serverMs: 6, networkMs: 180, deviceMs: 2 }),
+    ];
     const r = buildSelfTestReport([st], CFG);
-    expect(r.stages[0]).toMatchObject({ steps: 3, kbPerFrame: 1, latencyMs: 40, latencyMaxMs: 90, serverMs: 5, deviceMs: 8 });
+    expect(r.stages[0]).toMatchObject({
+      steps: 3, kbPerFrame: 1, latencyMs: 46, latencyMaxMs: 213,
+      browserMs: 25, serverMs: 5, networkMs: 10, deviceMs: 1, limit: "browser",
+    });
   });
 
-  it("names the largest part of the latency as the limit", () => {
+  it("names the largest measured part as the limit", () => {
     const r = buildSelfTestReport([
-      stage("small", 5, 40, 8, 5, 1),     // 27 ms left over, small frames: the browser
-      stage("partial", 5, 60, 40, 8, 4),  // the device
-      stage("full", 5, 200, 75, 10, 23),  // 115 ms left over, big frames: the network
-      stage("cpu", 5, 120, 20, 80, 10),   // the server
+      stage("small", 5, { browserMs: 40, serverMs: 5, networkMs: 8, deviceMs: 1 }, 1),
+      stage("partial", 5, { browserMs: 20, serverMs: 8, networkMs: 15, deviceMs: 40 }, 8),
+      stage("full", 5, { browserMs: 20, serverMs: 10, networkMs: 90, deviceMs: 45 }, 20),
+      stage("cpu", 5, { browserMs: 20, serverMs: 80, networkMs: 10, deviceMs: 20 }, 10),
     ], CFG);
     expect(r.stages.map(s => s.limit)).toEqual(["browser", "device", "network", "server"]);
   });
 
-  it("bases min_frame_interval on the device time for full-screen frames", () => {
-    // ESP32-S3 software decode of a 480x480 frame: ~75 ms -> at least 90 ms
-    const r = buildSelfTestReport([stage("small", 5, 40, 8, 5, 1), stage("full", 5, 120, 75, 10, 23)], CFG);
-    expect(r.recommendedMinFrameInterval).toBe(90);
-    expect(r.recommendations.some(t => t.includes("too low for this device"))).toBe(true);
+  // ESP32-S3, 480x480: ~13 ms per partial frame, ~45 ms per full one
+  const deviceStages = () => [
+    stage("small", 5, { browserMs: 40, serverMs: 5, networkMs: 8, deviceMs: 1 }, 1),
+    stage("partial", 5, { browserMs: 60, serverMs: 6, networkMs: 70, deviceMs: 13 }, 8),
+    stage("full", 5, { browserMs: 20, serverMs: 6, networkMs: 90, deviceMs: 45 }, 20),
+  ];
+
+  it("recommends one interval for smooth animations and one for no lag on full-screen changes", () => {
+    const r = buildSelfTestReport(deviceStages(), CFG);
+    // 13 * 1.3 = 16.9 -> 20 ms; 45 * 1.3 = 58.5 -> 60 ms
+    expect(r.minFrameInterval).toEqual({ smoothMs: 20, noLagMs: 60 });
+    expect(r.recommendations[0]).toContain("20 ms for smooth animations");
+    expect(r.recommendations[0]).toContain("or 60 ms so the screen doesn't lag");
   });
 
-  it("suggests lowering a min_frame_interval that is far above what the device needs", () => {
-    const r = buildSelfTestReport([stage("full", 5, 60, 20, 8, 23)], { ...CFG, minFrameInterval: 200 });
-    expect(r.recommendedMinFrameInterval).toBe(30);
-    expect(r.recommendations.some(t => t.includes("caps animations at 5 fps"))).toBe(true);
+  it("explains where the current min_frame_interval falls", () => {
+    const say = (cur: number) => buildSelfTestReport(deviceStages(), { ...CFG, minFrameInterval: cur }).recommendations[1];
+    expect(say(10)).toContain("lower than the device keeps up with even for partial updates");
+    expect(say(20)).toContain("suits animations; full-screen changes in a row (scrolling) may lag");
+    expect(say(200)).toContain("caps animations at 5 fps; 60 ms is enough even for full-screen changes");
+  });
+
+  it("points at Wi-Fi when the latency varies a lot", () => {
+    const st = stage("partial", 4, { browserMs: 20, serverMs: 6, networkMs: 30, deviceMs: 13 }, 8);
+    st.steps.push(step({ browserMs: 20, serverMs: 6, networkMs: 250, deviceMs: 13 }));
+    const r = buildSelfTestReport([st], CFG);
+    expect(r.recommendations.some(t => t.includes("typical of Wi-Fi power saving"))).toBe(true);
+  });
+
+  it("splits the network time into Wi-Fi latency and transfer", () => {
+    // From a real ESP32-S3: 1.1 KB took 42 ms on the network, 20.5 KB took 93 ms
+    const r = buildSelfTestReport([
+      stage("small", 5, { browserMs: 14, serverMs: 7, networkMs: 42, deviceMs: 1 }, 1.1),
+      stage("full", 5, { browserMs: 12, serverMs: 7, networkMs: 93, deviceMs: 45 }, 20.5),
+    ], CFG);
+    // (93 - 42) / (20.5 - 1.1) = 2.63 ms/KB -> ~380 KB/s; 42 - 2.63 * 1.1 = 39 ms fixed
+    expect(r.wifi).toEqual({ fixedMs: 39, kbPerSec: 380 });
+    const small = r.recommendations.find(t => t.startsWith("A small change"))!;
+    expect(small).toContain("~39 ms Wi-Fi latency per update + ~3 ms to transfer");
+    expect(small).toContain("Most of it is latency, not bandwidth: set wifi power_save_mode: none");
+    const full = r.recommendations.find(t => t.startsWith("A full-screen change"))!;
+    expect(full).toContain("~39 ms Wi-Fi latency per update + ~54 ms to transfer ~20.5 KB at ~380 KB/s");
+    expect(full).toContain("Most of it is the transfer: lower jpeg_quality");
   });
 
   it("warns when tiles reach max_bytes_per_msg", () => {
-    const r = buildSelfTestReport([stage("full", 5, 120, 75, 10, 23, { maxRectBytes: 14000 })], CFG);
+    const r = buildSelfTestReport([stage("full", 5, { browserMs: 20, serverMs: 8, networkMs: 30, deviceMs: 45 }, 20, { maxRectBytes: 14000 })], CFG);
     expect(r.recommendations.some(t => t.includes("max_bytes_per_msg"))).toBe(true);
   });
 
   it("skips stages without measured changes", () => {
-    const r = buildSelfTestReport([stage("full", 0, 0, 0, 0, 0)], CFG);
+    const r = buildSelfTestReport([stage("full", 0, { browserMs: 0, serverMs: 0, networkMs: 0, deviceMs: 0 }, 0)], CFG);
     expect(r.stages).toHaveLength(0);
-    expect(r.recommendedMinFrameInterval).toBeUndefined();
+    expect(r.minFrameInterval).toEqual({ smoothMs: undefined, noLagMs: undefined });
     expect(r.recommendations[0]).toContain("No frames were measured");
   });
 });

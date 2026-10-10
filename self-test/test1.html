@@ -171,6 +171,7 @@
     #result table { border-collapse: collapse; width: 100%; margin-bottom: .6em; }
     #result th, #result td { padding: .2em .3em; text-align: right; border-bottom: 1px solid #333; white-space: nowrap; }
     #result th { color: #aaa; font-weight: normal; }
+    #result td.limit { color: #e08a00; font-weight: bold; }
     #result th:first-child, #result td:first-child { text-align: left; white-space: normal; }
     #result ul { margin: 0; padding-left: 1.1em; }
     #result li { margin-bottom: .4em; }
@@ -351,18 +352,28 @@
         if (s) line(label, `${s.latencyMs} ms`, `limit: ${names[s.limit]}`);
         else line(label, 'no data');
       }
-      if (report.recommendedMinFrameInterval)
-        line('min_frame_interval', `${report.recommendedMinFrameInterval} ms`);
+      // Two values: smooth animations / no lag on full-screen changes (explained below).
+      const mfi = report.minFrameInterval || {};
+      const mfiValues = [mfi.smoothMs, mfi.noLagMs].filter(v => v !== undefined);
+      if (mfiValues.length)
+        line('min_frame_interval', `${[...new Set(mfiValues)].join(' / ')} ms`);
       body.appendChild(verdict);
 
-      // Details per stage (medians); max values are in the server log.
+      // Where the time goes per stage (medians, ms); the largest part is highlighted.
+      // Max values are in the server log.
+      const short = { small: 'Small', partial: 'Partial', full: 'Full' };
       const table = el('table');
       const head = el('tr');
-      for (const h of ['Stage', 'KB', 'Total ms', 'Server', 'Device']) head.appendChild(el('th', h));
+      for (const h of ['', 'KB', 'Total', 'Browser', 'Server', 'Net', 'Device']) head.appendChild(el('th', h));
       table.appendChild(head);
       for (const s of report.stages) {
         const row = el('tr');
-        for (const c of [s.label, s.kbPerFrame, s.latencyMs, s.serverMs, s.deviceMs]) row.appendChild(el('td', String(c)));
+        for (const c of [short[s.name] || s.label, s.kbPerFrame, s.latencyMs]) row.appendChild(el('td', String(c)));
+        for (const part of ['browser', 'server', 'network', 'device']) {
+          const td = el('td', String(s[`${part}Ms`]));
+          if (part === s.limit) td.className = 'limit';
+          row.appendChild(td);
+        }
         table.appendChild(row);
       }
       body.appendChild(table);

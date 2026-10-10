@@ -22,8 +22,8 @@ type Expected = "reset" | "step";
 // The test page makes one change at a time and reports it through a CDP binding. The runner
 // waits for the frame with that change to be sent, asks the client for its stats, and its
 // reply confirms the frame was drawn: that's the change's latency. Only then does the page
-// make the next change, so the device never has more than one frame in flight - it has no
-// flow control of its own, and flooding it can trip its watchdog.
+// make the next change, so the device never has more than one frame in flight: frames queued
+// on the device would add to the latency (and older clients without flow control can crash).
 export class SelfTestRunner {
   private _broadcaster: DeviceBroadcaster;
   private _dev?: DeviceSession;
@@ -34,6 +34,9 @@ export class SelfTestRunner {
   private _expected: Expected[] = [];
   private _stepStartMs = 0;
   private _awaitingFrame = false;
+  // timestamps of the current step's frame: arrived from the browser, handed to the socket
+  private _frameAtMs = 0;
+  private _sentAtMs = 0;
   private _report?: SelfTestReport;
 
   constructor(broadcaster: DeviceBroadcaster) {
@@ -62,7 +65,18 @@ export class SelfTestRunner {
   public handleClientStats(stats: ClientFrameStats): void {
     const kind = this._expected.shift();
     if (kind !== "step" || !this._stage) return;
-    this._stage.steps.push({ latencyMs: Date.now() - this._stepStartMs, deviceMs: stats.avgRenderMs });
+    const now = Date.now();
+    const deviceMs = stats.avgRenderMs;
+    this._stage.steps.push({
+      latencyMs: now - this._stepStartMs,
+      // change on the page -> frame from the screencast (render + PNG encode + CDP)
+      browserMs: Math.max(0, this._frameAtMs - this._stepStartMs),
+      // waiting for the pipeline + decode, diff and JPEG encode
+      serverMs: Math.max(0, this._sentAtMs - this._frameAtMs),
+      // sent -> confirmed, minus the device's own decode and draw time
+      networkMs: Math.max(0, now - this._sentAtMs - deviceMs),
+      deviceMs,
+    });
     this._continuePage();
   }
 
@@ -83,9 +97,11 @@ export class SelfTestRunner {
     this._dev?.cdp.send("Runtime.evaluate", { expression: "window.rwvContinue && window.rwvContinue()" }).catch(() => { });
   }
 
-  private _onFrameSent(): void {
+  private _onFrameSent(frameAtMs: number, sentAtMs: number): void {
     if (!this._awaitingFrame || !this._dev) return;
     this._awaitingFrame = false;
+    this._frameAtMs = frameAtMs;
+    this._sentAtMs = sentAtMs;
     if (this._broadcaster.requestFrameStats(this._dev.deviceId)) this._expected.push("step");
   }
 
@@ -109,7 +125,7 @@ export class SelfTestRunner {
         dev.stats = newPipelineStats();
         // One frame in flight at a time, so the interval would only add to the latency.
         dev.minFrameIntervalOverride = 0;
-        dev.onFrameSent = () => this._onFrameSent();
+        dev.onFrameSent = (frameAtMs, sentAtMs) => this._onFrameSent(frameAtMs, sentAtMs);
         this._stage = { name: evt.name, label: evt.label, steps: [], server: dev.stats };
         console.log(`[self-test] Stage "${evt.label}" started`);
         break;
