@@ -11,11 +11,22 @@ export type StepResult = {
   deviceMs: number;   // decode + draw on the device, as the device reports it
 };
 
+// A burst stage: the whole screen changed on every browser frame for changesMs, paced by
+// intervalMs (min_frame_interval for the stage). lagMs is how long after the last change the
+// device confirmed the last frame, i.e. how far it had fallen behind.
+export type BurstResult = {
+  intervalMs: number;
+  changesMs: number;
+  lagMs: number;
+  timedOut: boolean;
+};
+
 export type StageResult = {
   name: string;
   label: string;
   steps: StepResult[];
   server: PipelineStats;
+  burst?: BurstResult;
 };
 
 export type ReportConfig = {
@@ -59,8 +70,20 @@ export type WifiEstimate = {
   kbPerSec?: number;
 };
 
+export type BurstSummary = {
+  intervalMs: number;
+  fps: number;        // frames the device showed per second, until it caught up
+  frames: number;
+  lagMs: number;      // behind the page at the end of the burst
+  lagging: boolean;   // noticeably more than a single full-screen change takes
+  timedOut: boolean;
+};
+
 export type SelfTestReport = {
   stages: StageSummary[];
+  bursts: BurstSummary[];
+  // The lowest burst interval without noticeable lag, when bursts were measured.
+  recommendedMinFrameIntervalMs?: number;
   minFrameInterval: MinFrameInterval;
   wifi?: WifiEstimate;
   recommendations: string[];
@@ -83,7 +106,7 @@ function median(values: number[]): number {
 
 export function summarizeStage(r: StageResult): StageSummary | undefined {
   const s = r.server;
-  if (!r.steps.length || !s.framesSent) return undefined;
+  if (r.burst || !r.steps.length || !s.framesSent) return undefined;
 
   const med = (pick: (x: StepResult) => number) => Math.round(median(r.steps.map(pick)));
   const parts: Record<Limit, number> = {
@@ -145,6 +168,35 @@ function limitAdvice(st: StageSummary, wifi: WifiEstimate | undefined, cfg: Repo
   }
 }
 
+// The interval a kind of frame needs: the busier of the server and the device, with headroom.
+const intervalFor = (st?: StageSummary) =>
+  st ? roundUp10(Math.max(st.deviceMs, st.serverMs) * MIN_FRAME_INTERVAL_MARGIN) : undefined;
+
+// The intervals the burst stages should run at: the configured one and the two estimates,
+// so the user sees the trade-off without changing the device's configuration.
+export function burstIntervals(results: StageResult[], configuredMs: number): number[] {
+  const stages = results.map(summarizeStage).filter((s): s is StageSummary => !!s);
+  const byName = (n: string) => stages.find(s => s.name === n);
+  const candidates = [configuredMs, intervalFor(byName("partial") ?? byName("small")), intervalFor(byName("full"))];
+  return [...new Set(candidates.filter((v): v is number => v !== undefined))].sort((a, b) => a - b);
+}
+
+function summarizeBurst(r: StageResult, full: StageSummary | undefined): BurstSummary {
+  const b = r.burst!;
+  const frames = r.server.framesSent;
+  // Falling behind means more than one full-screen change takes on its own, plus a couple of
+  // frames of slack.
+  const allowedMs = (full?.latencyMs ?? 100) + 2 * (full?.deviceMs ?? 50);
+  return {
+    intervalMs: b.intervalMs,
+    fps: round1(frames / (Math.max(b.changesMs + b.lagMs, 1) / 1000)),
+    frames,
+    lagMs: Math.round(b.lagMs),
+    lagging: b.timedOut || b.lagMs > allowedMs,
+    timedOut: b.timedOut,
+  };
+}
+
 export function buildSelfTestReport(results: StageResult[], cfg: ReportConfig): SelfTestReport {
   const stages = results.map(summarizeStage).filter((s): s is StageSummary => !!s);
   const recs: string[] = [];
@@ -153,13 +205,22 @@ export function buildSelfTestReport(results: StageResult[], cfg: ReportConfig): 
   const partial = byName("partial");
   const full = byName("full");
 
-  // The interval a kind of frame needs: the busier of the server and the device, with headroom.
-  const intervalFor = (st?: StageSummary) =>
-    st ? roundUp10(Math.max(st.deviceMs, st.serverMs) * MIN_FRAME_INTERVAL_MARGIN) : undefined;
   const minFrameInterval: MinFrameInterval = { smoothMs: intervalFor(partial ?? small), noLagMs: intervalFor(full) };
   const { smoothMs, noLagMs } = minFrameInterval;
 
-  if (smoothMs !== undefined && noLagMs !== undefined) {
+  const bursts = results.filter(r => r.burst).map(r => summarizeBurst(r, full)).sort((a, b) => a.intervalMs - b.intervalMs);
+  const recommendedMinFrameIntervalMs = bursts.find(b => !b.lagging)?.intervalMs;
+
+  if (bursts.length) {
+    // Measured directly: the lowest interval at which the screen keeps up while scrolling.
+    const lines = bursts.map(b => `${b.intervalMs} ms: ${b.fps} fps, ${b.timedOut ? "didn't catch up" : `${b.lagMs} ms behind`}`);
+    recs.push(`Scrolling (the whole screen changing for 2 s): ${lines.join("; ")}.`);
+    recs.push(recommendedMinFrameIntervalMs !== undefined
+      ? `min_frame_interval: ${recommendedMinFrameIntervalMs} ms is the lowest tested value at which the screen keeps up while scrolling` +
+        (cfg.minFrameInterval === recommendedMinFrameIntervalMs ? " (your current value)." : ` (now ${cfg.minFrameInterval} ms).`) +
+        ` Lower values make animations smoother but the screen lags behind on full-screen changes.`
+      : `The screen lagged behind at every tested min_frame_interval: try ~${Math.round(Math.max(...bursts.map(b => b.intervalMs)) * 1.5)} ms, a lower jpeg_quality (now ${cfg.jpegQuality}) or a smaller decode queue on the device.`);
+  } else if (smoothMs !== undefined && noLagMs !== undefined) {
     recs.push(`min_frame_interval: ${smoothMs} ms for smooth animations (the device draws a partial update in ~${(partial ?? small)!.deviceMs} ms), ` +
       `or ${noLagMs} ms so the screen doesn't lag behind when all of it changes, e.g. while scrolling (~${full!.deviceMs} ms per frame). ` +
       `Anything in between trades one for the other.`);
@@ -191,7 +252,7 @@ export function buildSelfTestReport(results: StageResult[], cfg: ReportConfig): 
   if (biggest > 0.9 * maxTile)
     recs.push(`Tiles reached the max_bytes_per_msg limit (${round1(biggest / 1024)} of ${round1(maxTile / 1024)} KB) and were split. Raising max_bytes_per_msg, if the device has the memory, reduces per-tile overhead.`);
 
-  return { stages, minFrameInterval, wifi, recommendations: recs, config: cfg };
+  return { stages, bursts, recommendedMinFrameIntervalMs, minFrameInterval, wifi, recommendations: recs, config: cfg };
 }
 
 export function formatReportForLog(report: SelfTestReport): string {
@@ -201,6 +262,8 @@ export function formatReportForLog(report: SelfTestReport): string {
       `browser ${s.browserMs} + server ${s.serverMs} + network ${s.networkMs} + device ${s.deviceMs}, ` +
       `limited by ${s.limit}, max tile ${s.maxTileKB} KB`);
   }
+  for (const b of report.bursts)
+    lines.push(`  Burst at ${b.intervalMs} ms: ${b.frames} frames, ${b.fps} fps, ${b.timedOut ? "didn't catch up" : `${b.lagMs} ms behind`}${b.lagging ? " (lagging)" : ""}`);
   if (report.wifi)
     lines.push(`  Wi-Fi: ~${report.wifi.fixedMs} ms per update + ${report.wifi.kbPerSec ? `~${report.wifi.kbPerSec} KB/s` : "transfer time not measurable"}`);
   for (const r of report.recommendations) lines.push(`  - ${r}`);

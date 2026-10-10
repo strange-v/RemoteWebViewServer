@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildSelfTestReport, StageResult, StepResult, ReportConfig } from "../src/selfTestReport.js";
+import { buildSelfTestReport, burstIntervals, StageResult, StepResult, ReportConfig } from "../src/selfTestReport.js";
 import { newPipelineStats, PipelineStats } from "../src/pipelineStats.js";
 
 const CFG: ReportConfig = { minFrameInterval: 80, maxBytesPerMessage: 14336, jpegQuality: 85 };
@@ -54,6 +54,34 @@ describe("buildSelfTestReport", () => {
     expect(r.minFrameInterval).toEqual({ smoothMs: 20, noLagMs: 60 });
     expect(r.recommendations[0]).toContain("20 ms for smooth animations");
     expect(r.recommendations[0]).toContain("or 60 ms so the screen doesn't lag");
+  });
+
+  // 2 s of full-screen changes at `intervalMs`, `frames` sent, device `lagMs` behind at the end
+  const burst = (intervalMs: number, frames: number, lagMs: number, timedOut = false): StageResult => ({
+    name: `burst-${intervalMs}`, label: "Scrolling", steps: [],
+    server: { ...newPipelineStats(), framesSent: frames },
+    burst: { intervalMs, changesMs: 2000, lagMs, timedOut },
+  });
+
+  it("runs bursts at the configured interval and both estimates", () => {
+    expect(burstIntervals(deviceStages(), 20)).toEqual([20, 60]);  // configured 20 = smooth estimate
+    expect(burstIntervals(deviceStages(), 80)).toEqual([20, 60, 80]);
+    expect(burstIntervals([], 80)).toEqual([80]);
+  });
+
+  it("recommends the lowest burst interval at which the screen keeps up", () => {
+    // full screen: 120 ms latency, 45 ms on the device -> lagging above 120 + 2 * 45 = 210 ms
+    const r = buildSelfTestReport([...deviceStages(), burst(20, 60, 700), burst(60, 34, 150), burst(80, 25, 120)], CFG);
+    expect(r.bursts.map(b => [b.intervalMs, b.fps, b.lagging])).toEqual([[20, 22.2, true], [60, 15.8, false], [80, 11.8, false]]);
+    expect(r.recommendedMinFrameIntervalMs).toBe(60);
+    expect(r.recommendations[0]).toContain("20 ms: 22.2 fps, 700 ms behind");
+    expect(r.recommendations[1]).toContain("60 ms is the lowest tested value at which the screen keeps up while scrolling (now 80 ms)");
+  });
+
+  it("says so when the screen lags at every tested interval", () => {
+    const r = buildSelfTestReport([...deviceStages(), burst(20, 50, 900), burst(60, 30, 0, true)], CFG);
+    expect(r.recommendedMinFrameIntervalMs).toBeUndefined();
+    expect(r.recommendations[1]).toContain("lagged behind at every tested min_frame_interval: try ~90 ms");
   });
 
   it("explains where the current min_frame_interval falls", () => {

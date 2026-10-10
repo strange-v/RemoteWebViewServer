@@ -172,6 +172,7 @@
     #result th, #result td { padding: .2em .3em; text-align: right; border-bottom: 1px solid #333; white-space: nowrap; }
     #result th { color: #aaa; font-weight: normal; }
     #result td.limit { color: #e08a00; font-weight: bold; }
+    #result td.best { color: #4caf50; font-weight: bold; }
     #result th:first-child, #result td:first-child { text-align: left; white-space: normal; }
     #result ul { margin: 0; padding-left: 1.1em; }
     #result li { margin-bottom: .4em; }
@@ -294,11 +295,25 @@
       },
     ];
 
+    // Resolves when the server calls rwvContinue (with an optional value), or on timeout.
     function waitForContinue(timeoutMs) {
       return new Promise(resolve => {
-        const timer = setTimeout(done, timeoutMs);
-        function done() { clearTimeout(timer); window.rwvContinue = null; resolve(); }
+        const timer = setTimeout(() => done(undefined), timeoutMs);
+        function done(value) { clearTimeout(timer); window.rwvContinue = null; resolve(value); }
         window.rwvContinue = done;
+      });
+    }
+
+    // Changes the whole screen on every browser frame for durationMs, like scrolling.
+    function burst(durationMs) {
+      return new Promise(resolve => {
+        const t0 = performance.now();
+        const tick = (t) => {
+          document.body.classList.toggle('inverted');
+          if (t - t0 < durationMs) requestAnimationFrame(tick);
+          else resolve();
+        };
+        requestAnimationFrame(tick);
       });
     }
 
@@ -318,6 +333,23 @@
           await sleep(150); // let the device breathe between frames
         }
         send({ type: 'stage-end', name: s.name });
+        await sleep(500);
+      }
+
+      // Scrolling: bursts of full-screen changes, each at a min_frame_interval the server
+      // picks from the results so far. Each ends once the device has caught up.
+      const plan = waitForContinue(3000);
+      send({ type: 'burst-plan' });
+      const bursts = (await plan) || 0;
+      for (let i = 0; i < bursts; i++) {
+        $('banner').innerText = `Self-test: scrolling ${i + 1}/${bursts}`;
+        await sleep(1000);
+        send({ type: 'stage-start', name: `burst${i}`, label: `Scrolling ${i + 1}`, burst: i });
+        await burst(2000);
+        if (document.body.classList.contains('inverted')) document.body.classList.remove('inverted');
+        const caughtUp = waitForContinue(12_000);
+        send({ type: 'stage-end', name: `burst${i}` });
+        await caughtUp;
         await sleep(500);
       }
       document.body.classList.remove('no-transition');
@@ -352,11 +384,16 @@
         if (s) line(label, `${s.latencyMs} ms`, `limit: ${names[s.limit]}`);
         else line(label, 'no data');
       }
-      // Two values: smooth animations / no lag on full-screen changes (explained below).
-      const mfi = report.minFrameInterval || {};
-      const mfiValues = [mfi.smoothMs, mfi.noLagMs].filter(v => v !== undefined);
-      if (mfiValues.length)
-        line('min_frame_interval', `${[...new Set(mfiValues)].join(' / ')} ms`);
+      if (report.recommendedMinFrameIntervalMs !== undefined) {
+        // Measured while scrolling: the lowest interval at which the screen keeps up.
+        line('min_frame_interval', `${report.recommendedMinFrameIntervalMs} ms`);
+      } else {
+        // Estimates: smooth animations / no lag on full-screen changes (explained below).
+        const mfi = report.minFrameInterval || {};
+        const mfiValues = [mfi.smoothMs, mfi.noLagMs].filter(v => v !== undefined);
+        if (mfiValues.length)
+          line('min_frame_interval', `${[...new Set(mfiValues)].join(' / ')} ms`);
+      }
       body.appendChild(verdict);
 
       // Where the time goes per stage (medians, ms); the largest part is highlighted.
@@ -377,6 +414,23 @@
         table.appendChild(row);
       }
       body.appendChild(table);
+
+      // Scrolling bursts per min_frame_interval; the recommended one is highlighted.
+      if (report.bursts && report.bursts.length) {
+        const bt = el('table');
+        const bh = el('tr');
+        for (const h of ['Scrolling at', 'fps', 'Behind']) bh.appendChild(el('th', h));
+        bt.appendChild(bh);
+        for (const b of report.bursts) {
+          const row = el('tr');
+          const behind = b.timedOut ? '> 10 s' : `${b.lagMs} ms`;
+          for (const c of [`${b.intervalMs} ms`, b.fps, behind]) row.appendChild(el('td', String(c)));
+          if (b.intervalMs === report.recommendedMinFrameIntervalMs) row.firstChild.className = 'best';
+          if (b.lagging) row.lastChild.className = 'limit';
+          bt.appendChild(row);
+        }
+        body.appendChild(bt);
+      }
 
       const list = el('ul');
       for (const r of report.recommendations) list.appendChild(el('li', r));
