@@ -1,6 +1,6 @@
 import type { DeviceSession } from "./deviceManager.js";
 import { TouchKind, parseFrameStatsPacket, parseOpenURLPacket, parseTouchPacket } from "./protocol.js";
-import { mapPointForRotation } from "./util.js";
+import { getScaledViewport, mapPointForRotation } from "./util.js";
 
 export class InputRouter {
   // per device id, so one device's moves don't throttle another's
@@ -51,7 +51,11 @@ export class InputRouter {
         dev.cfg.width, dev.cfg.height,
         dev.cfg.rotation
       );
-      const points = [{ x: rotated.x, y: rotated.y, radiusX: 1, radiusY: 1, force: 1, id }];
+      // Touches come in device pixels, CDP expects CSS pixels of the (scaled) viewport.
+      const viewport = getScaledViewport(dev.cfg.width, dev.cfg.height, dev.cfg.scale);
+      const cssX = rotated.x * viewport.width / dev.cfg.width;
+      const cssY = rotated.y * viewport.height / dev.cfg.height;
+      const points = [{ x: cssX, y: cssY, radiusX: 1, radiusY: 1, force: 1, id }];
 
       switch (kind) {
         case TouchKind.Down:

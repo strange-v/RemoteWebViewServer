@@ -23,3 +23,15 @@ export function mapPointForRotation(
     case 270: return { x: srcW - 1 - yd, y: xd };
   }
 }
+
+// CSS viewport for a device of width x height physical px shown at the given scale.
+export function getScaledViewport(
+  width: number,
+  height: number,
+  scale: number
+): { width: number; height: number } {
+  return {
+    width: Math.max(1, Math.round(width / scale)),
+    height: Math.max(1, Math.round(height / scale)),
+  };
+}

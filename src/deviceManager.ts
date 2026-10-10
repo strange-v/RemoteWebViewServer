@@ -8,6 +8,7 @@ import { SelfTestRunner } from "./selfTest.js";
 import { getInjectScriptFromUrl } from "./scriptLoader.js";
 import { PipelineStats, newPipelineStats } from "./pipelineStats.js";
 import { FrameAckWindow } from "./frameAckWindow.js";
+import { getScaledViewport } from "./util.js";
 
 export type DeviceSession = {
   id: string;
@@ -42,6 +43,8 @@ export type DeviceSession = {
   handleFrameAck: (frameId: number) => void;
 
   stats: PipelineStats;
+  // frames came smaller than the device and had to be upscaled; logged once
+  scaleWarned?: boolean;
   // replaces cfg.minFrameInterval while set (the self-test sends one frame at a time)
   minFrameIntervalOverride?: number;
   // frameAtMs: when the browser delivered the frame; sentAtMs: when it was handed to the socket
@@ -102,6 +105,12 @@ async function _stopScreencastIfUnusedAsync(id: string): Promise<void> {
   console.log(`[device] Screencast stopped for ${id}: no clients`);
 }
 
+// Width and height from the IHDR chunk of a PNG, without decoding it.
+function pngSize(png: Buffer): { width: number; height: number } | undefined {
+  if (png.length < 24 || png.readUInt32BE(12) !== 0x49484452) return undefined; // "IHDR"
+  return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
+}
+
 function startScreencastAsync(session: { send(method: any, params?: any): Promise<any> }, cfg: DeviceConfig) {
   return session.send('Page.startScreencast', {
     format: 'png',
@@ -140,10 +149,17 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
     }
   }
 
+  // The page is laid out at cfg.width/height divided by the scale and rendered at
+  // deviceScaleFactor = scale, so the screencast frames keep the device's physical size.
+  const viewport = getScaledViewport(cfg.width, cfg.height, cfg.scale);
+
+  // Full Chrome accepts a window size only for a new window ("Target position can only be
+  // set for new windows"); a separate window per device also keeps their sizes independent.
   const { targetId } = await root.send<{ targetId: string }>('Target.createTarget', {
     url: 'about:blank',
-    width: cfg.width,
-    height: cfg.height,
+    width: viewport.width,
+    height: viewport.height,
+    newWindow: true,
   });
 
   let session: any;
@@ -156,9 +172,9 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
 
     await session.send('Page.enable');
     await session.send('Emulation.setDeviceMetricsOverride', {
-      width: cfg.width,
-      height: cfg.height,
-      deviceScaleFactor: 1,
+      width: viewport.width,
+      height: viewport.height,
+      deviceScaleFactor: cfg.scale,
       mobile: true
     });
     if (PREFERS_REDUCED_MOTION) {
@@ -259,6 +275,19 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
       const pngFull = Buffer.from(b64, 'base64');
 
       let img = sharp(pngFull);
+      const size = pngSize(pngFull);
+      if (size && (size.width !== cfg.width || size.height !== cfg.height)) {
+        // Chrome renders at most at the browser's device scale factor (MAX_DEVICE_SCALE_FACTOR),
+        // and a fractional scale can be a pixel off; stretch the frame to the device size.
+        if (!dev.scaleWarned && size.width < cfg.width) {
+          dev.scaleWarned = true;
+          console.warn(`[device] ${id}: frames are ${size.width}x${size.height} instead of ` +
+            `${cfg.width}x${cfg.height}, upscaling; set MAX_DEVICE_SCALE_FACTOR >= ${cfg.scale} for sharp output`);
+        }
+        const { data, info } = await img.removeAlpha().resize(cfg.width, cfg.height, { fit: 'fill' })
+          .raw().toBuffer({ resolveWithObject: true });
+        img = sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } });
+      }
       if (dev.cfg.rotation) img = img.rotate(dev.cfg.rotation);
 
       const { data, info } = await img
