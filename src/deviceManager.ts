@@ -11,6 +11,9 @@ export type DeviceSession = {
   id: string;
   deviceId: string;
   cdp: CDPSession;
+  sessionId: string;
+  // screencast runs only while clients are connected
+  screencasting: boolean;
   cfg: DeviceConfig;
   url: string;
   lastActive: number;
@@ -40,20 +43,54 @@ const devices = new Map<string, DeviceSession>();
 let _cleanupRunning = false;
 export const broadcaster = new DeviceBroadcaster();
 
-const _pending = new Map<string, Promise<DeviceSession>>();
+const _pending = new Map<string, Promise<unknown>>();
 
-// Calls for the same id run one after another, so concurrent connections
-// can't both see "no device" and each create a browser tab.
-export function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<DeviceSession> {
+// Operations on the same device id run one after another, so e.g. concurrent
+// connections can't both see "no device" and each create a browser tab.
+function _enqueue<T>(id: string, op: () => Promise<T>): Promise<T> {
   const prev = _pending.get(id);
   const next = (prev ?? Promise.resolve())
     .catch(() => { })
-    .then(() => _ensureDeviceAsync(id, cfg));
+    .then(op);
   _pending.set(id, next);
   next.finally(() => {
     if (_pending.get(id) === next) _pending.delete(id);
   }).catch(() => { });
   return next;
+}
+
+export function getDevice(id: string): DeviceSession | undefined {
+  return devices.get(id);
+}
+
+export function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<DeviceSession> {
+  return _enqueue(id, () => _ensureDeviceAsync(id, cfg));
+}
+
+// Stops the screencast once the last client is gone; Chrome then stops encoding frames.
+export function releaseDeviceAsync(id: string): Promise<void> {
+  return _enqueue(id, () => _stopScreencastIfUnusedAsync(id));
+}
+
+async function _stopScreencastIfUnusedAsync(id: string): Promise<void> {
+  const device = devices.get(id);
+  if (!device || !device.screencasting || broadcaster.getClientCount(id) > 0) return;
+
+  device.screencasting = false;
+  if (device.throttleTimer) clearTimeout(device.throttleTimer);
+  device.throttleTimer = undefined;
+  device.pendingB64 = undefined;
+  await device.cdp.send('Page.stopScreencast').catch(() => { });
+  console.log(`[device] Screencast stopped for ${id}: no clients`);
+}
+
+function startScreencastAsync(session: { send(method: any, params?: any): Promise<any> }, cfg: DeviceConfig) {
+  return session.send('Page.startScreencast', {
+    format: 'png',
+    maxWidth: cfg.width,
+    maxHeight: cfg.height,
+    everyNthFrame: cfg.everyNthFrame
+  });
 }
 
 async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<DeviceSession> {
@@ -64,7 +101,17 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
   if (device) {
     if (deviceConfigsEqual(device.cfg, cfg)) {
       device.lastActive = Date.now();
-      device.resendFullFrame();
+      if (device.screencasting) {
+        device.resendFullFrame();
+      } else {
+        // The last frame we hold may be stale; the restarted screencast sends a fresh one.
+        device.lastB64 = undefined;
+        device.processedB64 = undefined;
+        device.processor.requestFullFrame();
+        await startScreencastAsync(device.cdp, device.cfg);
+        device.screencasting = true;
+        console.log(`[device] Screencast resumed for ${id}`);
+      }
       return device;
     } else {
       console.log(`[device] Reconfiguring device ${id}`);
@@ -105,12 +152,10 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
       await session.send('Page.addScriptToEvaluateOnNewDocument', { source: keyboardScript });
     }
 
-    await session.send('Page.startScreencast', {
-      format: 'png',
-      maxWidth: cfg.width,
-      maxHeight: cfg.height,
-      everyNthFrame: cfg.everyNthFrame
-    });
+    // Needed for Inspector.targetCrashed.
+    await session.send('Inspector.enable').catch(() => { });
+
+    await startScreencastAsync(session, cfg);
   } catch (e) {
     // Don't leave a half-configured tab behind.
     try { await root.send('Target.closeTarget', { targetId }); } catch { }
@@ -130,6 +175,8 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
     id: targetId,
     deviceId: id,
     cdp: session,
+    sessionId: session.sessionId,
+    screencasting: true,
     cfg: cfg,
     url: '',
     lastActive: Date.now(),
@@ -177,7 +224,7 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
       if (dev.cfg.rotation) img = img.rotate(dev.cfg.rotation);
 
       const { data, info } = await img
-        .ensureAlpha()
+        .removeAlpha()
         .raw()
         .toBuffer({ resolveWithObject: true });
       const out = await processor.processFrameAsync({ data, width: info.width, height: info.height });
@@ -242,8 +289,27 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
   session.on('Page.navigatedWithinDocument', (evt: any) => {
     handleNavigation(evt.url);
   });
-  
+
+  // E.g. out of memory on a heavy dashboard: without this the display stays frozen.
+  session.on('Inspector.targetCrashed', () => {
+    console.warn(`[device] Tab of device ${id} crashed, recreating it`);
+    _enqueue(id, () => _recreateCrashedDeviceAsync(newDevice))
+      .catch(e => console.warn(`[device] Failed to recreate device ${id}: ${(e as Error).message}`));
+  });
+
   return newDevice;
+}
+
+async function _recreateCrashedDeviceAsync(crashed: DeviceSession): Promise<void> {
+  const id = crashed.deviceId;
+  if (devices.get(id) !== crashed) return; // already replaced or removed
+
+  const url = crashed.url;
+  await deleteDeviceAsync(crashed, true);
+  const device = await _ensureDeviceAsync(id, crashed.cfg);
+  if (url && url !== 'about:blank')
+    await device.cdp.send('Page.navigate', { url });
+  await _stopScreencastIfUnusedAsync(id);
 }
 
 export async function cleanupIdleAsync(ttlMs = 5 * 60_000) {
@@ -253,7 +319,7 @@ export async function cleanupIdleAsync(ttlMs = 5 * 60_000) {
   try {
     const now = Date.now();
     const staleIds = Array.from(devices.values())
-      .filter(d => now - d.lastActive > ttlMs)
+      .filter(d => now - d.lastActive > ttlMs && broadcaster.getClientCount(d.deviceId) === 0)
       .map(d => d.deviceId);
 
     for (const id of staleIds) {
@@ -261,14 +327,18 @@ export async function cleanupIdleAsync(ttlMs = 5 * 60_000) {
       if (!dev) continue;
 
       console.log(`[device] Cleaning up idle device ${id}`);
-      await deleteDeviceAsync(dev).catch(() => { /* swallow */ });
+      await _enqueue(id, async () => {
+        // A client may have connected while earlier devices were being removed.
+        if (devices.get(id) === dev && broadcaster.getClientCount(id) === 0)
+          await deleteDeviceAsync(dev);
+      }).catch(() => { /* swallow */ });
     }
   } finally {
     _cleanupRunning = false;
   }
 }
 
-async function deleteDeviceAsync(device: DeviceSession) {
+async function deleteDeviceAsync(device: DeviceSession, crashed = false) {
   const root = getRoot();
 
   if (!devices.delete(device.deviceId))
@@ -276,7 +346,11 @@ async function deleteDeviceAsync(device: DeviceSession) {
 
   if (device.throttleTimer)
     clearTimeout(device.throttleTimer);
+  device.selfTestRunner.stop();
 
-  try { await device.cdp.send("Page.stopScreencast").catch(() => { }); } catch { }
-  try { await root?.send("Target.closeTarget", { targetId: device.id }); } catch { }
+  // A crashed tab doesn't answer, so don't wait for the command to time out.
+  if (!crashed && device.screencasting)
+    await device.cdp.send("Page.stopScreencast").catch(() => { });
+  await root?.send("Target.closeTarget", { targetId: device.id }).catch(() => { });
+  root?.removeSession(device.sessionId);
 }

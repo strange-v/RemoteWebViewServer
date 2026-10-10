@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import sharp from "sharp";
-import { FrameProcessor, FrameProcessorCfg, RGBA } from "../src/frameProcessor.js";
+import { FrameProcessor, FrameProcessorCfg, RGB, BPP } from "../src/frameProcessor.js";
 import { buildFramePackets, FRAME_HEADER_BYTES, TILE_HEADER_BYTES } from "../src/protocol.js";
 
 const DEFAULT_CFG: FrameProcessorCfg = {
@@ -12,30 +12,30 @@ const DEFAULT_CFG: FrameProcessorCfg = {
   maxBytesPerMessage: 14336,
 };
 
-function solidFrame(width: number, height: number, rgb: [number, number, number]): RGBA {
-  const data = Buffer.alloc(width * height * 4);
-  for (let o = 0; o < data.length; o += 4) {
-    data[o] = rgb[0]; data[o + 1] = rgb[1]; data[o + 2] = rgb[2]; data[o + 3] = 255;
+function solidFrame(width: number, height: number, rgb: [number, number, number]): RGB {
+  const data = Buffer.alloc(width * height * BPP);
+  for (let o = 0; o < data.length; o += BPP) {
+    data[o] = rgb[0]; data[o + 1] = rgb[1]; data[o + 2] = rgb[2];
   }
   return { data, width, height };
 }
 
 // Pseudo-random noise: about the worst case for JPEG size.
-function noiseFrame(width: number, height: number, seed = 1): RGBA {
-  const data = Buffer.alloc(width * height * 4);
+function noiseFrame(width: number, height: number, seed = 1): RGB {
+  const data = Buffer.alloc(width * height * BPP);
   let s = seed >>> 0;
-  for (let o = 0; o < data.length; o += 4) {
+  for (let o = 0; o < data.length; o += BPP) {
     s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
-    data[o] = s >>> 24; data[o + 1] = (s >>> 16) & 0xff; data[o + 2] = (s >>> 8) & 0xff; data[o + 3] = 255;
+    data[o] = s >>> 24; data[o + 1] = (s >>> 16) & 0xff; data[o + 2] = (s >>> 8) & 0xff;
   }
   return { data, width, height };
 }
 
-function paint(frame: RGBA, x0: number, y0: number, w: number, h: number, rgb: [number, number, number]): RGBA {
+function paint(frame: RGB, x0: number, y0: number, w: number, h: number, rgb: [number, number, number]): RGB {
   const data = Buffer.from(frame.data);
   for (let y = y0; y < y0 + h; y++) {
     for (let x = x0; x < x0 + w; x++) {
-      const o = (y * frame.width + x) * 4;
+      const o = (y * frame.width + x) * BPP;
       data[o] = rgb[0]; data[o + 1] = rgb[1]; data[o + 2] = rgb[2];
     }
   }
