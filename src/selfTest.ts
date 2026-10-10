@@ -22,8 +22,12 @@ type PageEvent =
   | { type: "result-ready" };
 
 // What the next client stats reply answers. The client replies in request order, and only
-// after drawing every frame sent before the request.
-type Expected = "reset" | "step" | "drain";
+// after drawing every frame sent before the request. A step request carries its own
+// timestamps: its reply may come after the page has given up waiting and moved on.
+type Expected =
+  | { kind: "reset" }
+  | { kind: "drain" }
+  | { kind: "step"; seq: number; stage: StageResult; stepStartMs: number; frameAtMs: number; sentAtMs: number };
 
 type BurstState = {
   intervalMs: number;
@@ -53,11 +57,9 @@ export class SelfTestRunner {
   private _stage?: StageResult;
   private _results: StageResult[] = [];
   private _expected: Expected[] = [];
+  private _stepSeq = 0;      // the step the page is waiting on
   private _stepStartMs = 0;
   private _awaitingFrame = false;
-  // timestamps of the current step's frame: arrived from the browser, handed to the socket
-  private _frameAtMs = 0;
-  private _sentAtMs = 0;
   private _burst?: BurstState;
   private _burstIntervals: number[] = [];
   private _report?: SelfTestReport;
@@ -86,26 +88,31 @@ export class SelfTestRunner {
   }
 
   public handleClientStats(stats: ClientFrameStats): void {
-    const kind = this._expected.shift();
-    if (kind === "drain" && this._burst) {
+    const e = this._expected.shift();
+    if (!e) return;
+    if (e.kind === "drain" && this._burst) {
       this._burst.pendingReplies--;
       this._burst.lastReplyMs = Date.now();
       return;
     }
-    if (kind !== "step" || !this._stage) return;
+    if (e.kind !== "step") return;
+
     const now = Date.now();
     const deviceMs = stats.avgRenderMs;
-    this._stage.steps.push({
-      latencyMs: now - this._stepStartMs,
+    // Recorded even when late: the change really took that long.
+    e.stage.steps.push({
+      latencyMs: now - e.stepStartMs,
       // change on the page -> frame from the screencast (render + PNG encode + CDP)
-      browserMs: Math.max(0, this._frameAtMs - this._stepStartMs),
+      browserMs: Math.max(0, e.frameAtMs - e.stepStartMs),
       // waiting for the pipeline + decode, diff and JPEG encode
-      serverMs: Math.max(0, this._sentAtMs - this._frameAtMs),
+      serverMs: Math.max(0, e.sentAtMs - e.frameAtMs),
       // sent -> confirmed, minus the device's own decode and draw time
-      networkMs: Math.max(0, now - this._sentAtMs - deviceMs),
+      networkMs: Math.max(0, now - e.sentAtMs - deviceMs),
       deviceMs,
     });
-    this._continuePage();
+    // Only the step the page is waiting on may let it continue; a late reply must not end
+    // the next step early.
+    if (e.seq === this._stepSeq) this._continuePage();
   }
 
   public stop(): void {
@@ -129,17 +136,16 @@ export class SelfTestRunner {
   }
 
   private _onFrameSent(frameAtMs: number, sentAtMs: number): void {
-    if (!this._awaitingFrame || !this._dev) return;
+    if (!this._awaitingFrame || !this._dev || !this._stage) return;
     this._awaitingFrame = false;
-    this._frameAtMs = frameAtMs;
-    this._sentAtMs = sentAtMs;
-    if (this._broadcaster.requestFrameStats(this._dev.deviceId)) this._expected.push("step");
+    if (this._broadcaster.requestFrameStats(this._dev.deviceId))
+      this._expected.push({ kind: "step", seq: this._stepSeq, stage: this._stage, stepStartMs: this._stepStartMs, frameAtMs, sentAtMs });
   }
 
   // Asks for client stats; the reply comes once the device has drawn everything sent so far.
   private _requestDrainConfirmation(): void {
     if (this._dev && this._burst && this._broadcaster.requestFrameStats(this._dev.deviceId)) {
-      this._expected.push("drain");
+      this._expected.push({ kind: "drain" });
       this._burst.pendingReplies++;
     }
   }
@@ -193,7 +199,7 @@ export class SelfTestRunner {
     switch (evt.type) {
       case "stage-start":
         // Reset the client's counters; that reply covers the time before the stage.
-        if (this._broadcaster.requestFrameStats(dev.deviceId)) this._expected.push("reset");
+        if (this._broadcaster.requestFrameStats(dev.deviceId)) this._expected.push({ kind: "reset" });
         dev.stats = newPipelineStats();
         this._stage = { name: evt.name, label: evt.label, steps: [], server: dev.stats };
         if (evt.burst !== undefined) {
@@ -218,6 +224,7 @@ export class SelfTestRunner {
         break;
 
       case "step":
+        this._stepSeq++;
         this._stepStartMs = Date.now();
         this._awaitingFrame = true;
         break;

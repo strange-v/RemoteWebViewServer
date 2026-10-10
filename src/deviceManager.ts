@@ -219,11 +219,15 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
   devices.set(id, newDevice);
   newDevice.processor.requestFullFrame();
 
+  // The device may be deleted or replaced (reconfiguration, tab crash) while a frame is being
+  // processed; its frames must then not reach the clients of the new session.
+  const isCurrent = () => devices.get(id) === newDevice;
+
   const flushPending = async () => {
     const dev = newDevice;
     dev.throttleTimer = undefined;
 
-    if (!dev.pendingB64) return;
+    if (!dev.pendingB64 || !isCurrent()) return;
     if (broadcaster.isCongested(id)) {
       // Keep only the newest frame until the client catches up; the diff is computed
       // against the last frame actually sent, so skipping frames is safe.
@@ -262,7 +266,7 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
         .raw()
         .toBuffer({ resolveWithObject: true });
       const out = await processor.processFrameAsync({ data, width: info.width, height: info.height });
-      if (out.rects.length > 0) {
+      if (out.rects.length > 0 && isCurrent()) {
         dev.frameId = (dev.frameId + 1) >>> 0;
         const procMs = performance.now() - t0;
         const bytes = broadcaster.sendFrameChunked(id, out, dev.frameId, cfg.maxBytesPerMessage);
@@ -288,7 +292,7 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
   };
 
   const scheduleFlush = () => {
-    if (newDevice.throttleTimer || newDevice.processing) return;
+    if (newDevice.throttleTimer || newDevice.processing || !isCurrent()) return;
     const now = Date.now();
     const since = newDevice.lastProcessedMs ? (now - newDevice.lastProcessedMs) : Infinity;
     const interval = newDevice.minFrameIntervalOverride ?? cfg.minFrameInterval;

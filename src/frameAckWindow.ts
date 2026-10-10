@@ -7,6 +7,10 @@
 //
 // Acks are cumulative ("everything up to frame N is done"), so one ack also covers frames
 // whose last packet the device dropped. Frame ids are u32 and wrap around.
+// Frames remembered for a client that hasn't acked yet: enough to cover the backlog sent
+// before its first ack, without growing forever for clients that never ack.
+const MAX_TRACKED_BEFORE_FIRST_ACK = 64;
+
 export class FrameAckWindow {
   private _inFlight: { frameId: number; sentAtMs: number }[] = [];
   private _supported = false;
@@ -23,8 +27,11 @@ export class FrameAckWindow {
     this._supported = false;
   }
 
+  // Tracked from the start of the connection, so frames sent before the first ack still count
+  // once it arrives; the limit applies only to clients that ack.
   sent(frameId: number, nowMs: number): void {
-    if (this._supported) this._inFlight.push({ frameId, sentAtMs: nowMs });
+    this._inFlight.push({ frameId, sentAtMs: nowMs });
+    if (!this._supported && this._inFlight.length > MAX_TRACKED_BEFORE_FIRST_ACK) this._inFlight.shift();
   }
 
   // Returns true when the ack freed room in the window.
@@ -38,7 +45,7 @@ export class FrameAckWindow {
   // Whether to hold back the next frame. A frame unacknowledged for longer than the timeout
   // counts as lost (e.g. an ack lost on reconnect), so a missing ack can't stall the stream.
   isFull(nowMs: number): boolean {
-    if (this._inFlight.length < this._size) return false;
+    if (!this._supported || this._inFlight.length < this._size) return false;
     if (nowMs - this._inFlight[0].sentAtMs > this._timeoutMs) {
       this._inFlight = [];
       return false;
@@ -48,7 +55,7 @@ export class FrameAckWindow {
 
   // When the oldest in-flight frame times out, if the window is full.
   timeoutAtMs(): number | undefined {
-    return this._inFlight.length ? this._inFlight[0].sentAtMs + this._timeoutMs : undefined;
+    return this._supported && this._inFlight.length ? this._inFlight[0].sentAtMs + this._timeoutMs : undefined;
   }
 }
 

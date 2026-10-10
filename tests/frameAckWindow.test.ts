@@ -12,7 +12,7 @@ describe("FrameAckWindow", () => {
   it("keeps at most `size` frames in flight once the client acks", () => {
     const w = new FrameAckWindow(2);
     w.sent(1, 0);
-    expect(w.ack(1)).toBe(false); // first ack: nothing was tracked yet
+    expect(w.ack(1)).toBe(true);
     expect(w.supported).toBe(true);
     w.sent(2, 10);
     expect(w.isFull(10)).toBe(false);
@@ -21,6 +21,22 @@ describe("FrameAckWindow", () => {
     expect(w.ack(2)).toBe(true);
     expect(w.isFull(30)).toBe(false);
     expect(w.inFlight).toBe(1);
+  });
+
+  it("counts the backlog sent before the first ack", () => {
+    const w = new FrameAckWindow(2);
+    for (let id = 1; id <= 10; id++) w.sent(id, 0);
+    w.ack(1);
+    expect(w.inFlight).toBe(9);
+    expect(w.isFull(0)).toBe(true); // nothing more until the device works through it
+    w.ack(9);
+    expect(w.isFull(0)).toBe(false);
+  });
+
+  it("remembers a bounded number of frames for clients that never ack", () => {
+    const w = new FrameAckWindow(2);
+    for (let id = 1; id <= 1000; id++) w.sent(id, 0);
+    expect(w.inFlight).toBe(64);
   });
 
   it("treats acks as cumulative", () => {
