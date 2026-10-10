@@ -4,7 +4,6 @@ import { DeviceConfig, deviceConfigsEqual, readInjectScriptConfig } from "./conf
 import { getRoot } from "./cdpRoot.js";
 import { FrameProcessor } from "./frameProcessor.js";
 import { DeviceBroadcaster } from "./broadcaster.js";
-import { hash32 } from "./util.js";
 import { SelfTestRunner } from "./selfTest.js";
 import { getInjectScriptFromUrl } from "./scriptLoader.js";
 
@@ -16,7 +15,6 @@ export type DeviceSession = {
   url: string;
   lastActive: number;
   frameId: number;
-  prevFrameHash: number;
   processor: FrameProcessor;
   selfTestRunner: SelfTestRunner
 
@@ -24,6 +22,10 @@ export type DeviceSession = {
   pendingB64?: string;
   throttleTimer?: NodeJS.Timeout;
   lastProcessedMs?: number;
+  // a frame is being processed; frames are processed one at a time
+  processing: boolean;
+  // last processed screencast frame, to skip identical ones
+  processedB64?: string;
 
   // last screencast frame, kept to re-send a full frame on request
   lastB64?: string;
@@ -130,12 +132,13 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
     url: '',
     lastActive: Date.now(),
     frameId: 0,
-    prevFrameHash: 0,
     processor,
     selfTestRunner: new SelfTestRunner(broadcaster),
     pendingB64: undefined,
     throttleTimer: undefined,
     lastProcessedMs: undefined,
+    processing: false,
+    processedB64: undefined,
     lastB64: undefined,
     resendFullFrame: () => { },
   };
@@ -148,17 +151,14 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
 
     const b64 = dev.pendingB64;
     dev.pendingB64 = undefined;
-    if (!b64) return;
+    if (!b64 || b64 === dev.processedB64) return;
 
+    // Frames must be processed one at a time: FrameProcessor diffs against the previous
+    // frame, and a later frame must never be sent before an earlier one.
+    dev.processing = true;
     try {
+      dev.processedB64 = b64;
       const pngFull = Buffer.from(b64, 'base64');
-
-      const h32 = hash32(pngFull);
-      if (dev.prevFrameHash === h32) {
-        dev.lastProcessedMs = Date.now();
-        return;
-      }
-      dev.prevFrameHash = h32;
 
       let img = sharp(pngFull);
       if (dev.cfg.rotation) img = img.rotate(dev.cfg.rotation);
@@ -176,11 +176,14 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
       console.warn(`[device] Failed to process frame for ${id}: ${(e as Error).message}`);
     } finally {
       dev.lastProcessedMs = Date.now();
+      dev.processing = false;
     }
+    // Frames that arrived meanwhile were held back; process the newest one.
+    if (dev.pendingB64) scheduleFlush();
   };
 
   const scheduleFlush = () => {
-    if (newDevice.throttleTimer) return;
+    if (newDevice.throttleTimer || newDevice.processing) return;
     const now = Date.now();
     const since = newDevice.lastProcessedMs ? (now - newDevice.lastProcessedMs) : Infinity;
     const delay = Math.max(0, cfg.minFrameInterval - (Number.isFinite(since) ? since : 0));
@@ -191,7 +194,7 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
   // static page has to re-process the last frame we received.
   newDevice.resendFullFrame = () => {
     newDevice.processor.requestFullFrame();
-    newDevice.prevFrameHash = 0;
+    newDevice.processedB64 = undefined;
     if (!newDevice.pendingB64 && newDevice.lastB64)
       newDevice.pendingB64 = newDevice.lastB64;
     if (newDevice.pendingB64)

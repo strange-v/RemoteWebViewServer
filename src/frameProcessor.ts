@@ -1,7 +1,6 @@
 import os from "node:os";
 import sharp from "sharp";
 import { Encoding, FRAME_HEADER_BYTES, TILE_HEADER_BYTES } from "./protocol.js";
-import { hash32 } from "./util.js";
 
 sharp.concurrency(Math.max(1, os.cpus().length - 1));
 
@@ -24,11 +23,19 @@ export type FrameProcessorCfg = {
   maxBytesPerMessage: number;
 };
 
+type TileInfo = { x: number; y: number; w: number; h: number; changed: boolean };
+type Box = { x: number; y: number; w: number; h: number };
+
+// Split point for oversized rects: a multiple of the JPEG MCU size keeps tiles friendly to HW decoders.
+const SPLIT_ALIGN = 16;
+
 export class FrameProcessor {
   private _cfg: FrameProcessorCfg;
   private _cols = 0;
   private _rows = 0;
-  private _prev?: Uint32Array;
+  // Last processed frame. Every tile that differed from its predecessor was sent,
+  // so this is exactly what the client shows. Must not be mutated by the caller.
+  private _prevFrame?: RGBA;
   private _iter = 0;
   private _fullFrameRequested = false;
 
@@ -42,16 +49,17 @@ export class FrameProcessor {
   }
 
   public async processFrameAsync(rgba: RGBA): Promise<FrameOut> {
-    if (!this._prev) this._initGrid(rgba.width, rgba.height);
+    const prev = this._prevFrame;
+    const sizeChanged = !prev || prev.width !== rgba.width || prev.height !== rgba.height;
+    if (sizeChanged) this._initGrid(rgba.width, rgba.height);
 
-    let forceFull = (this._iter % this._cfg.fullFrameEvery) === 0;
+    let forceFull = sizeChanged || (this._iter % this._cfg.fullFrameEvery) === 0;
     if (this._fullFrameRequested) {
       forceFull = true;
       this._fullFrameRequested = false;
     }
     const chosenEncoding: Encoding = Encoding.JPEG;
 
-    type TileInfo = { x: number; y: number; w: number; h: number; idx: number; h32: number; changed: boolean };
     const tiles: TileInfo[] = [];
     let changedArea = 0;
 
@@ -62,13 +70,8 @@ export class FrameProcessor {
         const w = Math.min(this._cfg.tileSize, rgba.width - x);
         const h = Math.min(this._cfg.tileSize, rgba.height - y);
 
-        const raw = this._extractRaw(rgba, x, y, w, h);
-        const h32 = hash32(raw);
-        const idx = ty * this._cols + tx;
-        const prev = this._prev![idx];
-        const changed = forceFull || (prev !== h32);
-
-        tiles.push({ x, y, w, h, idx, h32, changed });
+        const changed = forceFull || this._tileDiffers(rgba, prev!, x, y, w, h);
+        tiles.push({ x, y, w, h, changed });
         if (changed) changedArea += w * h;
       }
     }
@@ -77,61 +80,56 @@ export class FrameProcessor {
     const changedPct = totalArea > 0 ? (changedArea / totalArea) : 0;
     const doFull = forceFull || (changedPct > this._cfg.fullframeAreaThreshold);
 
-    let out: FrameOut;
-    if (doFull) {
-      out = await this._processFullFrame(rgba, tiles, chosenEncoding);
-    } else {
-      out = await this._processPartialFrame(rgba, tiles, chosenEncoding);
-    }
+    const boxes = doFull
+      ? this._splitWholeFrame(rgba.width, rgba.height, this._cfg.fullframeTileCount)
+      : this._mergeChangedTiles(tiles, rgba.width, rgba.height);
 
-    const maxBytesPerTile = this._cfg.maxBytesPerMessage - FRAME_HEADER_BYTES - TILE_HEADER_BYTES;
-    for (let i = 0; i < out.rects.length; i++) {
-      const r = out.rects[i];
-      if (r.data.length > maxBytesPerTile) {
-        const redData = await this._makeRedFrameAsync(r.w, r.h, chosenEncoding);
-        out.rects[i] = { x: r.x, y: r.y, w: r.w, h: r.h, data: redData };
-      }
-    }
-
-    this._iter++;
-    return out;
-  }
-
-  private async _processFullFrame(
-    rgba: RGBA,
-    tilesInfo: { idx: number; h32: number }[],
-    encoding: Encoding
-  ): Promise<FrameOut> {
-    const rectsForFull = this._splitWholeFrame(rgba.width, rgba.height, this._cfg.fullframeTileCount);
     const rects: Rect[] = [];
+    for (const b of boxes) await this._encodeFittingAsync(rgba, b, chosenEncoding, rects);
 
-    for (const r of rectsForFull) {
-      const raw = this._extractRaw(rgba, r.x, r.y, r.w, r.h);
-      const data = await this._encode(raw, r.w, r.h, encoding);
-      rects.push({ x: r.x, y: r.y, w: r.w, h: r.h, data });
-    }
-
-    for (const t of tilesInfo) this._prev![t.idx] = t.h32;
-
-    return { rects, isFullFrame: true, encoding };
+    this._prevFrame = rgba;
+    this._iter++;
+    return { rects, isFullFrame: doFull, encoding: chosenEncoding };
   }
 
-  private async _processPartialFrame(
-    rgba: RGBA,
-    tiles: { x: number; y: number; w: number; h: number; idx: number; h32: number; changed: boolean }[],
-    encoding: Encoding
-  ): Promise<FrameOut> {
-    const mergedRects = this._mergeChangedTiles(tiles, rgba.width, rgba.height);
-
-    const out: Rect[] = [];
-    for (const r of mergedRects) {
-      const raw = this._extractRaw(rgba, r.x, r.y, r.w, r.h);
-      const data = await this._encode(raw, r.w, r.h, encoding);
-      out.push({ ...r, data });
+  private _tileDiffers(cur: RGBA, prev: RGBA, x: number, y: number, w: number, h: number): boolean {
+    const rowBytes = w * 4;
+    for (let yy = 0; yy < h; yy++) {
+      const off = ((y + yy) * cur.width + x) * 4;
+      if (cur.data.compare(prev.data, off, off + rowBytes, off, off + rowBytes) !== 0) return true;
     }
-    for (const t of tiles) if (t.changed) this._prev![t.idx] = t.h32;
+    return false;
+  }
 
-    return { rects: out, isFullFrame: false, encoding };
+  // Encodes a box, splitting it in halves until every piece fits into one message.
+  private async _encodeFittingAsync(rgba: RGBA, b: Box, enc: Encoding, out: Rect[]): Promise<void> {
+    const maxBytesPerTile = this._cfg.maxBytesPerMessage - FRAME_HEADER_BYTES - TILE_HEADER_BYTES;
+    const data = await this._encode(this._extractRaw(rgba, b.x, b.y, b.w, b.h), b.w, b.h, enc);
+    if (data.length <= maxBytesPerTile) {
+      out.push({ ...b, data });
+      return;
+    }
+
+    const halves = this._splitBox(b);
+    if (!halves) {
+      // A tiny box that still doesn't fit: maxBytesPerMessage is unrealistically small.
+      out.push({ ...b, data: await this._makeRedFrameAsync(b.w, b.h, enc) });
+      return;
+    }
+    for (const h of halves) await this._encodeFittingAsync(rgba, h, enc, out);
+  }
+
+  private _splitBox(b: Box): [Box, Box] | null {
+    const alongX = b.w >= b.h;
+    const size = alongX ? b.w : b.h;
+    if (size < 2) return null;
+
+    let cut = Math.floor(size / 2);
+    if (size >= 2 * SPLIT_ALIGN) cut = Math.floor(cut / SPLIT_ALIGN) * SPLIT_ALIGN;
+
+    return alongX
+      ? [{ x: b.x, y: b.y, w: cut, h: b.h }, { x: b.x + cut, y: b.y, w: b.w - cut, h: b.h }]
+      : [{ x: b.x, y: b.y, w: b.w, h: cut }, { x: b.x, y: b.y + cut, w: b.w, h: b.h - cut }];
   }
 
   private _splitWholeFrame(w: number, h: number, n: number): { x: number; y: number; w: number; h: number }[] {
@@ -212,10 +210,10 @@ export class FrameProcessor {
   }
 
   private _mergeChangedTiles(
-    tiles: { x: number; y: number; w: number; h: number; idx: number; h32: number; changed: boolean }[],
+    tiles: TileInfo[],
     frameW: number,
     frameH: number
-  ): { x: number; y: number; w: number; h: number }[] {
+  ): Box[] {
     const cols = this._cols, rows = this._rows;
     const changed: boolean[][] = Array.from({ length: rows }, () => Array<boolean>(cols).fill(false));
     const visited: boolean[][] = Array.from({ length: rows }, () => Array<boolean>(cols).fill(false));
@@ -274,7 +272,6 @@ export class FrameProcessor {
   private _initGrid(w: number, h: number) {
     this._cols = Math.ceil(w / this._cfg.tileSize);
     this._rows = Math.ceil(h / this._cfg.tileSize);
-    this._prev = new Uint32Array(this._cols * this._rows);
   }
 
   private _extractRaw(rgba: RGBA, x: number, y: number, w: number, h: number): Buffer {
