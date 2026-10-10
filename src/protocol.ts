@@ -9,7 +9,9 @@
 //   [type u8=2][ver u8=1][subtype u8][pointer_id u8][x u16][y u16]
 //
 // FrameStats message:
-//   [type u8=3][ver u8=1][frame_render_time_ms u16]
+//   server -> client: request (payload zeroed)
+//   client -> server: [type u8=3][ver u8=1][avg_frame_render_time_ms u32][bytes u32]
+//   Stats cover the frames since the previous request; the client resets them on reply.
 //
 // OpenURL message:
 //   [type u8=4][ver u8=1][flags u16][url_len u32][url utf8 bytes...]
@@ -18,17 +20,30 @@
 //
 // Current URL packet:
 //   [type u8][ver u8][len u32][url utf8 bytes...]
+//
+// RequestFullFrame message (client -> server):
+//   [type u8=7][ver u8=1]
+//   Sent when the client lost or failed to decode part of the stream; the server
+//   re-sends the current page as a full frame.
+//
+// FrameAck message (client -> server, optional):
+//   [type u8=8][ver u8=1][frame_id u32]
+//   Sent after the client has finished a frame (the message with FLAG_LAST_OF_FRAME), whether
+//   or not it could draw it. Cumulative: acknowledges every frame up to frame_id. Once a client
+//   sends acks, the server keeps at most a couple of frames in flight to it.
 
 export const PROTOCOL_VERSION = 1 as const;
 
 export enum MsgType {
-  Unknown     = 0,
-  Frame       = 1,
-  Touch       = 2,
-  FrameStats  = 3,
-  OpenURL     = 4,
-  Keepalive   = 5,
-  CurrentURL  = 6,
+  Unknown          = 0,
+  Frame            = 1,
+  Touch            = 2,
+  FrameStats       = 3,
+  OpenURL          = 4,
+  Keepalive        = 5,
+  CurrentURL       = 6,
+  RequestFullFrame = 7,
+  FrameAck         = 8,
 }
 
 export enum Encoding {
@@ -79,6 +94,7 @@ export const TOUCH_BYTES        = 1 + 1 + 1 + 1 + 2 + 2;  // 8
 export const FRAME_STATS_BYTES  = 1 + 1 + 4 + 4;          // 10
 export const OPENURL_HEADER_BYTES = 1 + 1 + 2 + 4;        // 8
 export const CURRENTURL_HEADER_BYTES = 1 + 1 + 4;         // 6
+export const FRAME_ACK_BYTES    = 1 + 1 + 4;              // 6
 
 const clampU16 = (v: number) => (v < 0 ? 0 : v > 0xffff ? 0xffff : v|0);
 
@@ -109,7 +125,7 @@ export function parseTouchPacket(buf: Buffer): TouchPacket | null {
   if (buf.readUInt8(1) !== PROTOCOL_VERSION) return null;
   
   const kind = buf.readUInt8(2);
-  if (kind > TouchKind.Up) return null;
+  if (kind === TouchKind.Unknown || kind > TouchKind.Tap) return null;
   
   const pointerId = buf.readUInt8(3);
   const x = buf.readUInt16LE(4);
@@ -118,12 +134,14 @@ export function parseTouchPacket(buf: Buffer): TouchPacket | null {
   return { kind, pointerId, x, y };
 }
 
-export function parseFrameStatsPacket(buf: Buffer): number | null {
+export type ClientFrameStats = { avgRenderMs: number; bytes: number };
+
+export function parseFrameStatsPacket(buf: Buffer): ClientFrameStats | null {
   if (!Buffer.isBuffer(buf) || buf.length < FRAME_STATS_BYTES) return null;
   if (buf.readUInt8(0) !== MsgType.FrameStats) return null;
   if (buf.readUInt8(1) !== PROTOCOL_VERSION) return null;
 
-  return buf.readUInt32LE(2);
+  return { avgRenderMs: buf.readUInt32LE(2), bytes: buf.readUInt32LE(6) };
 }
 
 export function parseOpenURLPacket(buf: Buffer): { flags: number; url: string } | null {
@@ -138,6 +156,21 @@ export function parseOpenURLPacket(buf: Buffer): { flags: number; url: string } 
   const url = buf.subarray(OPENURL_HEADER_BYTES, OPENURL_HEADER_BYTES + len).toString("utf8");
   
   return { flags, url };
+}
+
+export function buildFrameAckPacket(frameId: number): Buffer {
+  const buf = Buffer.alloc(FRAME_ACK_BYTES);
+  buf.writeUInt8(MsgType.FrameAck, 0);
+  buf.writeUInt8(PROTOCOL_VERSION, 1);
+  buf.writeUInt32LE(frameId >>> 0, 2);
+  return buf;
+}
+
+export function parseFrameAckPacket(buf: Buffer): number | null {
+  if (!Buffer.isBuffer(buf) || buf.length < FRAME_ACK_BYTES) return null;
+  if (buf.readUInt8(0) !== MsgType.FrameAck) return null;
+  if (buf.readUInt8(1) !== PROTOCOL_VERSION) return null;
+  return buf.readUInt32LE(2);
 }
 
 export function buildFrameStatsPacket(): Buffer {

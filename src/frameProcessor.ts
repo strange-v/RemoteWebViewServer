@@ -1,11 +1,12 @@
 import os from "node:os";
 import sharp from "sharp";
 import { Encoding, FRAME_HEADER_BYTES, TILE_HEADER_BYTES } from "./protocol.js";
-import { hash32 } from "./util.js";
 
 sharp.concurrency(Math.max(1, os.cpus().length - 1));
 
-export type RGBA = { data: Buffer; width: number; height: number };
+// Packed RGB, no alpha: 25% less to decode, compare and encode than RGB.
+export type RGB = { data: Buffer; width: number; height: number };
+export const BPP = 3; // bytes per pixel
 
 export type Rect = { x: number; y: number; w: number; h: number; data: Buffer };
 
@@ -24,11 +25,19 @@ export type FrameProcessorCfg = {
   maxBytesPerMessage: number;
 };
 
+type TileInfo = { x: number; y: number; w: number; h: number; changed: boolean };
+type Box = { x: number; y: number; w: number; h: number };
+
+// Split point for oversized rects: a multiple of the JPEG MCU size keeps tiles friendly to HW decoders.
+const SPLIT_ALIGN = 16;
+
 export class FrameProcessor {
   private _cfg: FrameProcessorCfg;
   private _cols = 0;
   private _rows = 0;
-  private _prev?: Uint32Array;
+  // Last processed frame. Every tile that differed from its predecessor was sent,
+  // so this is exactly what the client shows. Must not be mutated by the caller.
+  private _prevFrame?: RGB;
   private _iter = 0;
   private _fullFrameRequested = false;
 
@@ -41,17 +50,18 @@ export class FrameProcessor {
     this._fullFrameRequested = true;
   }
 
-  public async processFrameAsync(rgba: RGBA): Promise<FrameOut> {
-    if (!this._prev) this._initGrid(rgba.width, rgba.height);
+  public async processFrameAsync(frame: RGB): Promise<FrameOut> {
+    const prev = this._prevFrame;
+    const sizeChanged = !prev || prev.width !== frame.width || prev.height !== frame.height;
+    if (sizeChanged) this._initGrid(frame.width, frame.height);
 
-    let forceFull = (this._iter % this._cfg.fullFrameEvery) === 0;
+    let forceFull = sizeChanged || (this._iter % this._cfg.fullFrameEvery) === 0;
     if (this._fullFrameRequested) {
       forceFull = true;
       this._fullFrameRequested = false;
     }
     const chosenEncoding: Encoding = Encoding.JPEG;
 
-    type TileInfo = { x: number; y: number; w: number; h: number; idx: number; h32: number; changed: boolean };
     const tiles: TileInfo[] = [];
     let changedArea = 0;
 
@@ -59,102 +69,88 @@ export class FrameProcessor {
       for (let tx = 0; tx < this._cols; tx++) {
         const x = tx * this._cfg.tileSize;
         const y = ty * this._cfg.tileSize;
-        const w = Math.min(this._cfg.tileSize, rgba.width - x);
-        const h = Math.min(this._cfg.tileSize, rgba.height - y);
+        const w = Math.min(this._cfg.tileSize, frame.width - x);
+        const h = Math.min(this._cfg.tileSize, frame.height - y);
 
-        const raw = this._extractRaw(rgba, x, y, w, h);
-        const h32 = hash32(raw);
-        const idx = ty * this._cols + tx;
-        const prev = this._prev![idx];
-        const changed = forceFull || (prev !== h32);
-
-        tiles.push({ x, y, w, h, idx, h32, changed });
+        const changed = forceFull || this._tileDiffers(frame, prev!, x, y, w, h);
+        tiles.push({ x, y, w, h, changed });
         if (changed) changedArea += w * h;
       }
     }
 
-    const totalArea = rgba.width * rgba.height;
+    const totalArea = frame.width * frame.height;
     const changedPct = totalArea > 0 ? (changedArea / totalArea) : 0;
     const doFull = forceFull || (changedPct > this._cfg.fullframeAreaThreshold);
 
-    let out: FrameOut;
-    if (doFull) {
-      out = await this._processFullFrame(rgba, tiles, chosenEncoding);
-    } else {
-      out = await this._processPartialFrame(rgba, tiles, chosenEncoding);
-    }
+    const boxes = doFull
+      ? this._splitWholeFrame(frame.width, frame.height, this._cfg.fullframeTileCount)
+      : this._mergeChangedTiles(tiles, frame.width, frame.height);
 
-    const maxBytesPerTile = this._cfg.maxBytesPerMessage - FRAME_HEADER_BYTES - TILE_HEADER_BYTES;
-    for (let i = 0; i < out.rects.length; i++) {
-      const r = out.rects[i];
-      if (r.data.length > maxBytesPerTile) {
-        const redData = await this._makeRedFrameAsync(r.w, r.h, chosenEncoding);
-        out.rects[i] = { x: r.x, y: r.y, w: r.w, h: r.h, data: redData };
-      }
-    }
+    // Encode in parallel: sharp runs each encode on the libuv thread pool.
+    const parts = await Promise.all(boxes.map(b => this._encodeFittingAsync(frame, b, chosenEncoding)));
+    const rects = parts.flat();
 
+    this._prevFrame = frame;
     this._iter++;
-    return out;
+    return { rects, isFullFrame: doFull, encoding: chosenEncoding };
   }
 
-  private async _processFullFrame(
-    rgba: RGBA,
-    tilesInfo: { idx: number; h32: number }[],
-    encoding: Encoding
-  ): Promise<FrameOut> {
-    const rectsForFull = this._splitWholeFrame(rgba.width, rgba.height, this._cfg.fullframeTileCount);
-    const rects: Rect[] = [];
-
-    for (const r of rectsForFull) {
-      const raw = this._extractRaw(rgba, r.x, r.y, r.w, r.h);
-      const data = await this._encode(raw, r.w, r.h, encoding);
-      rects.push({ x: r.x, y: r.y, w: r.w, h: r.h, data });
+  private _tileDiffers(cur: RGB, prev: RGB, x: number, y: number, w: number, h: number): boolean {
+    const rowBytes = w * BPP;
+    for (let yy = 0; yy < h; yy++) {
+      const off = ((y + yy) * cur.width + x) * BPP;
+      if (cur.data.compare(prev.data, off, off + rowBytes, off, off + rowBytes) !== 0) return true;
     }
-
-    for (const t of tilesInfo) this._prev![t.idx] = t.h32;
-
-    return { rects, isFullFrame: true, encoding };
+    return false;
   }
 
-  private async _processPartialFrame(
-    rgba: RGBA,
-    tiles: { x: number; y: number; w: number; h: number; idx: number; h32: number; changed: boolean }[],
-    encoding: Encoding
-  ): Promise<FrameOut> {
-    const mergedRects = this._mergeChangedTiles(tiles, rgba.width, rgba.height);
+  // Encodes a box, splitting it in halves until every piece fits into one message.
+  private async _encodeFittingAsync(frame: RGB, b: Box, enc: Encoding): Promise<Rect[]> {
+    const maxBytesPerTile = this._cfg.maxBytesPerMessage - FRAME_HEADER_BYTES - TILE_HEADER_BYTES;
+    const data = await this._encode(this._extractRaw(frame, b.x, b.y, b.w, b.h), b.w, b.h, enc);
+    if (data.length <= maxBytesPerTile) return [{ ...b, data }];
 
-    const out: Rect[] = [];
-    for (const r of mergedRects) {
-      const raw = this._extractRaw(rgba, r.x, r.y, r.w, r.h);
-      const data = await this._encode(raw, r.w, r.h, encoding);
-      out.push({ ...r, data });
+    const halves = this._splitBox(b);
+    if (!halves) {
+      // A tiny box that still doesn't fit: maxBytesPerMessage is unrealistically small.
+      return [{ ...b, data: await this._makeRedFrameAsync(b.w, b.h, enc) }];
     }
-    for (const t of tiles) if (t.changed) this._prev![t.idx] = t.h32;
+    const parts = await Promise.all(halves.map(h => this._encodeFittingAsync(frame, h, enc)));
+    return parts.flat();
+  }
 
-    return { rects: out, isFullFrame: false, encoding };
+  private _splitBox(b: Box): [Box, Box] | null {
+    const alongX = b.w >= b.h;
+    const size = alongX ? b.w : b.h;
+    if (size < 2) return null;
+
+    let cut = Math.floor(size / 2);
+    if (size >= 2 * SPLIT_ALIGN) cut = Math.floor(cut / SPLIT_ALIGN) * SPLIT_ALIGN;
+
+    return alongX
+      ? [{ x: b.x, y: b.y, w: cut, h: b.h }, { x: b.x + cut, y: b.y, w: b.w - cut, h: b.h }]
+      : [{ x: b.x, y: b.y, w: b.w, h: cut }, { x: b.x, y: b.y + cut, w: b.w, h: b.h - cut }];
   }
 
   private _splitWholeFrame(w: number, h: number, n: number): { x: number; y: number; w: number; h: number }[] {
     if (n <= 1) return [{ x: 0, y: 0, w, h }];
 
-    if (n === 2) {
-      const h1 = Math.floor(h / 2);
-      const h2 = h - h1;
-      return [
-        { x: 0, y: 0, w, h: h1 },
-        { x: 0, y: h1, w, h: h2 },
-      ];
-    }
-
-    let rows = Math.floor(Math.sqrt(n));
+    // Two parts are horizontal bands; otherwise a grid of rows x cols = n.
+    let rows = n === 2 ? 2 : Math.floor(Math.sqrt(n));
     while (rows > 1 && (n % rows !== 0)) rows--;
     const cols = Math.floor(n / rows);
 
+    // Inner edges go to the nearest multiple of SPLIT_ALIGN, so tiles stay friendly to
+    // HW JPEG decoders (the ESP32-P4 one needs a width that is a multiple of 16).
     const split = (size: number, parts: number): number[] => {
       const out: number[] = [];
       let prev = 0;
       for (let i = 1; i <= parts; i++) {
-        const cur = Math.floor((i * size) / parts);
+        let cur = size;
+        if (i < parts) {
+          cur = Math.round((i * size) / parts / SPLIT_ALIGN) * SPLIT_ALIGN;
+          cur = Math.min(Math.max(cur, prev + 1), size - (parts - i)); // no empty parts
+        }
         out.push(cur - prev);
         prev = cur;
       }
@@ -212,10 +208,10 @@ export class FrameProcessor {
   }
 
   private _mergeChangedTiles(
-    tiles: { x: number; y: number; w: number; h: number; idx: number; h32: number; changed: boolean }[],
+    tiles: TileInfo[],
     frameW: number,
     frameH: number
-  ): { x: number; y: number; w: number; h: number }[] {
+  ): Box[] {
     const cols = this._cols, rows = this._rows;
     const changed: boolean[][] = Array.from({ length: rows }, () => Array<boolean>(cols).fill(false));
     const visited: boolean[][] = Array.from({ length: rows }, () => Array<boolean>(cols).fill(false));
@@ -274,42 +270,41 @@ export class FrameProcessor {
   private _initGrid(w: number, h: number) {
     this._cols = Math.ceil(w / this._cfg.tileSize);
     this._rows = Math.ceil(h / this._cfg.tileSize);
-    this._prev = new Uint32Array(this._cols * this._rows);
   }
 
-  private _extractRaw(rgba: RGBA, x: number, y: number, w: number, h: number): Buffer {
-    const out = Buffer.allocUnsafe(w * h * 4);
+  private _extractRaw(frame: RGB, x: number, y: number, w: number, h: number): Buffer {
+    const out = Buffer.allocUnsafe(w * h * BPP);
     for (let yy = 0; yy < h; yy++) {
-      const src = ((y + yy) * rgba.width + x) * 4;
-      rgba.data.copy(out, yy * w * 4, src, src + w * 4);
+      const src = ((y + yy) * frame.width + x) * BPP;
+      frame.data.copy(out, yy * w * BPP, src, src + w * BPP);
     }
     return out;
   }
 
-  private async _encode(rawRgba: Buffer, w: number, h: number, enc: Encoding): Promise<Buffer> {
+  private async _encode(rawRgb: Buffer, w: number, h: number, enc: Encoding): Promise<Buffer> {
     switch (enc) {
       case Encoding.JPEG:
-        return this._encodeJPEG(rawRgba, w, h);
+        return this._encodeJPEG(rawRgb, w, h);
       case Encoding.RAW565:
-        return this._encodeRAW565(rawRgba);
+        return this._encodeRAW565(rawRgb);
       default:
-        return this._encodeJPEG(rawRgba, w, h);
+        return this._encodeJPEG(rawRgb, w, h);
     }
   }
 
-  private async _encodeJPEG(rawRgba: Buffer, w: number, h: number): Promise<Buffer> {
-    return sharp(rawRgba, { raw: { width: w, height: h, channels: 4 } })
+  private async _encodeJPEG(rawRgb: Buffer, w: number, h: number): Promise<Buffer> {
+    return sharp(rawRgb, { raw: { width: w, height: h, channels: BPP } })
       .jpeg({ quality: this._cfg.jpegQuality, mozjpeg: false, chromaSubsampling: "4:2:0" })
       .toBuffer();
   }
 
-  private _encodeRAW565(rawRgba: Buffer): Buffer {
-    const pxCount = rawRgba.length >> 2;
+  private _encodeRAW565(rawRgb: Buffer): Buffer {
+    const pxCount = rawRgb.length / BPP;
     const out = Buffer.allocUnsafe(pxCount * 2);
-    for (let i = 0, j = 0; i < pxCount; i++, j += 4) {
-      const r = rawRgba[j];
-      const g = rawRgba[j + 1];
-      const b = rawRgba[j + 2];
+    for (let i = 0, j = 0; i < pxCount; i++, j += BPP) {
+      const r = rawRgb[j];
+      const g = rawRgb[j + 1];
+      const b = rawRgb[j + 2];
       const v = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
       out[i * 2] = v & 0xFF;
       out[i * 2 + 1] = (v >> 8) & 0xFF;
@@ -318,10 +313,8 @@ export class FrameProcessor {
   }
 
   private async _makeRedFrameAsync(w: number, h: number, enc: Encoding): Promise<Buffer> {
-    const raw = Buffer.allocUnsafe(w * h * 4);
-    const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-    const RGBA_RED = 0xFF0000FF; // bytes: FF 00 00 FF
-    for (let o = 0; o < raw.length; o += 4) view.setUint32(o, RGBA_RED, true);
+    const raw = Buffer.alloc(w * h * BPP);
+    for (let o = 0; o < raw.length; o += BPP) raw[o] = 0xFF;
     return this._encode(raw, w, h, enc);
   }
 }

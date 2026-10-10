@@ -18,7 +18,7 @@ Headless browser that renders target web pages (e.g., Home Assistant dashboards)
 - No viewers = no work: frames are ACK’d to keep Chromium streaming, but tiles aren’t encoded/queued when there are no listeners.
 - Touch event bridging (down/move/up) — scrolling supported (no gestures yet)
 - Client-driven navigation: the client can control which page to open.
-- Built-in self-test page to visualize and measure render time
+- Built-in self-test (open the `self-test` URL from the client): measures what the whole pipeline delivers, names the bottleneck (device, server CPU or network) and suggests `min_frame_interval`, `jpeg_quality` and `max_bytes_per_msg`
 - Health endpoint for container orchestration
 - Optional DevTools access via TCP proxy
 

@@ -12,19 +12,16 @@
     "coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "devtools-protocol": "^0.0.1687809",
     "env-var": "^7.5.0",
-    "playwright-core": "^1.62.1",
-    "sharp": "^0.35.4",
-    "ws": "^8.21.3",
-    "xxhash-wasm": "^1.1.0"
+    "playwright-core": "^1.64.0",
+    "sharp": "^0.35.5",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
-    "@types/node": "^24.13.3",
-    "@types/ws": "^8.18.1",
-    "ts-node": "^10.9.2",
-    "tsx": "^4.23.12",
+    "@types/node": "^24.19.2",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.3"
   }
 }

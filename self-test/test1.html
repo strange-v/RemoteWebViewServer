@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>FPS Test</title>
+  <title>Self-test</title>
   <style>
     :root {
       --bg-card: #23242b;
@@ -137,19 +137,45 @@
       transition: width .5s ease;
     }
 
+
+    body.inverted { filter: invert(1); }
+    body.no-transition * { transition: none !important; }
+
+    #banner {
+      position: fixed;
+      right: 6px;
+      bottom: 4px;
+      padding: 2px 8px;
+      border-radius: 8px;
+      background: rgba(255,255,255,.08);
+      font-size: 12px;
+      color: #bbb;
+    }
+
     #result {
       display: none;
-      position: absolute;
-      left: 0;
-      right: 0;
-      top: 0;
-      bottom: 0;
-      padding-top: 64px;
+      position: fixed;
+      inset: 0;
+      overflow: auto;
+      padding: 8px;
       background: #000;
       z-index: 11;
-      text-align: center;
-      font-size: 32px;
+      /* Sized for small displays: ~17px on 480px wide, 12px minimum, 22px maximum. */
+      font-size: clamp(12px, 3.6vw, 22px);
+      line-height: 1.3;
     }
+    #result h1 { font-size: 1.15em; margin: 0 0 .3em; color: #aaa; font-weight: normal; }
+    #result .verdict { font-size: 1.3em; margin-bottom: .5em; }
+    #result .verdict div { margin-bottom: .15em; }
+    #result .verdict b { color: #e08a00; }
+    #result table { border-collapse: collapse; width: 100%; margin-bottom: .6em; }
+    #result th, #result td { padding: .2em .3em; text-align: right; border-bottom: 1px solid #333; white-space: nowrap; }
+    #result th { color: #aaa; font-weight: normal; }
+    #result td.limit { color: #e08a00; font-weight: bold; }
+    #result td.best { color: #4caf50; font-weight: bold; }
+    #result th:first-child, #result td:first-child { text-align: left; white-space: normal; }
+    #result ul { margin: 0; padding-left: 1.1em; }
+    #result li { margin-bottom: .4em; }
   </style>
 </head>
 <body>
@@ -172,7 +198,7 @@
       <span class="icon">
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="m3.55 19.09l1.41 1.41l1.8-1.79l-1.42-1.42M12 6c-3.31 0-6 2.69-6 6s2.69 6 6 6s6-2.69 6-6c0-3.32-2.69-6-6-6m8 7h3v-2h-3m-2.76 7.71l1.8 1.79l1.41-1.41l-1.79-1.8M20.45 5l-1.41-1.4l-1.8 1.79l1.42 1.42M13 1h-2v3h2M6.76 5.39L4.96 3.6L3.55 5l1.79 1.81zM1 13h3v-2H1m12 9h-2v3h2"/></svg>
       </span>
-      <span class="value" id="power">27.2 °C</span>
+      <span class="value" id="temp">27.2 °C</span>
     </div>
   </div>
 
@@ -208,7 +234,7 @@
       </span>
       <span class="text">Charger</span>
     </div>
-    <div  id="button5"class="button">
+    <div id="button5" class="button">
       <span class="icon">
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="currentColor" d="M4.22 2A2.22 2.22 0 0 0 2 4.22v15.56C2 21 3 22 4.22 22h15.56A2.22 2.22 0 0 0 22 19.78V4.22C22 3 21 2 19.78 2zM11 4.07V6h2V4.07A8 8 0 0 1 20 12a8 8 0 0 1-7 7.93V18h-2v1.93A8 8 0 0 1 4 12a8 8 0 0 1 7-7.93M7.5 10.5A1.5 1.5 0 0 0 6 12c0 .83.66 1.5 1.5 1.5A1.5 1.5 0 0 0 9 12a1.5 1.5 0 0 0-1.5-1.5m9 0A1.5 1.5 0 0 0 15 12a1.5 1.5 0 0 0 1.5 1.5A1.5 1.5 0 0 0 18 12a1.5 1.5 0 0 0-1.5-1.5"/></svg>
       </span>
@@ -234,81 +260,189 @@
     </div>
   </div>
 
-  <div id="result"></div>
+  <div id="banner"></div>
+  <div id="result"><h1>Self-test results</h1><div id="result-body">Waiting for results…</div></div>
   <script>
-    let iteration = 0;
+    // Each stage makes a series of changes, one at a time: after a change the page reports a
+    // "step" and waits until the server says the device has drawn it (rwvContinue). The device
+    // therefore never gets more than one frame at a time - it has no flow control of its own.
+    const send = (msg) => {
+      try { if (window.rwvSelfTest) window.rwvSelfTest(JSON.stringify(msg)); } catch (e) { }
+    };
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const $ = (id) => document.getElementById(id);
+
     let power = 60;
+    const STAGES = [
+      {
+        name: 'small', label: 'Small change', steps: 15,
+        // A sensor value changes.
+        change: () => { power += 42; $('power').innerText = `${power} W`; },
+      },
+      {
+        name: 'partial', label: 'Partial', steps: 15,
+        // A card and two sliders change: a part of the screen.
+        change: (i) => {
+          $(`button${i % 6}`).classList.toggle('on');
+          $('bar0').style.width = `${(i * 37 + 20) % 101}%`;
+          $('bar1').style.width = `${(i * 53 + 70) % 101}%`;
+        },
+      },
+      {
+        name: 'full', label: 'Full screen', steps: 10,
+        // Every pixel changes, like switching pages. An even count ends in the original state.
+        change: () => document.body.classList.toggle('inverted'),
+      },
+    ];
 
-    let intervalIdChip = 0;
-    let intervalIdButtons = 0;
-    let intervalIdSliders = 0;
-    let intervalIdBg = 0;
-
-    function start() {
-      intervalIdChip = setInterval(() => animateChip(), 1_000);
-      intervalIdButtons = setInterval(() => animateButtons(), 8_000);
-      intervalIdSliders = setInterval(() => animateSliders(), 13_000);
+    // Resolves when the server calls rwvContinue (with an optional value), or on timeout.
+    function waitForContinue(timeoutMs) {
+      return new Promise(resolve => {
+        const timer = setTimeout(() => done(undefined), timeoutMs);
+        function done(value) { clearTimeout(timer); window.rwvContinue = null; resolve(value); }
+        window.rwvContinue = done;
+      });
     }
 
-    function animateChip() {
-      if (iteration > 60) {
-        clearInterval(intervalIdChip);
-        clearInterval(intervalIdButtons);
-        clearInterval(intervalIdSliders);
+    // Changes the whole screen on every browser frame for durationMs, like scrolling.
+    function burst(durationMs) {
+      return new Promise(resolve => {
+        const t0 = performance.now();
+        const tick = (t) => {
+          document.body.classList.toggle('inverted');
+          if (t - t0 < durationMs) requestAnimationFrame(tick);
+          else resolve();
+        };
+        requestAnimationFrame(tick);
+      });
+    }
 
-        setTimeout(() => startBackgroundChange(), 10_000)
-        return;
+    async function runTest() {
+      await sleep(2000);
+      document.body.classList.add('no-transition'); // one change = one frame
+      for (let i = 0; i < STAGES.length; i++) {
+        const s = STAGES[i];
+        $('banner').innerText = `Self-test ${i + 1}/${STAGES.length}: ${s.label}`;
+        await sleep(1000); // keep the banner update out of the measurement
+        send({ type: 'stage-start', name: s.name, label: s.label });
+        for (let n = 0; n < s.steps; n++) {
+          const drawn = waitForContinue(3000);
+          s.change(n);
+          send({ type: 'step' });
+          await drawn;
+          await sleep(150); // let the device breathe between frames
+        }
+        send({ type: 'stage-end', name: s.name });
+        await sleep(500);
       }
-      iteration++;
 
-      power += 42;
-      document.getElementById('power').innerText = `${power} W`;
-    }
-    function animateButtons() {
-      const id = iteration % 6;
-      const button = document.getElementById(`button${id}`);
-      if (button.classList.contains('on'))
-        button.classList.remove('on');
-      else
-        button.classList.add('on');
-    }
-    function animateSliders() {
-      const id = iteration % 2;
-      const bar = document.getElementById(`bar${id}`);
-      const value = (iteration + 66) % 101;
-      bar.style.width = `${value}%`;
-    }
-    function startBackgroundChange() {
-      iteration = 0;
-      intervalIdBg = setInterval(() => changeBackground(), 3_000);
-    }
-    function changeBackground() {
-      if (iteration > 20) {
-        clearInterval(intervalIdBg);
-        return;
+      // Scrolling: bursts of full-screen changes, each at a min_frame_interval the server
+      // picks from the results so far. Each ends once the device has caught up.
+      const plan = waitForContinue(3000);
+      send({ type: 'burst-plan' });
+      const bursts = (await plan) || 0;
+      for (let i = 0; i < bursts; i++) {
+        $('banner').innerText = `Self-test: scrolling ${i + 1}/${bursts}`;
+        await sleep(1000);
+        send({ type: 'stage-start', name: `burst${i}`, label: `Scrolling ${i + 1}`, burst: i });
+        await burst(2000);
+        if (document.body.classList.contains('inverted')) document.body.classList.remove('inverted');
+        const caughtUp = waitForContinue(12_000);
+        send({ type: 'stage-end', name: `burst${i}` });
+        await caughtUp;
+        await sleep(500);
       }
-      iteration++;
-
-      document.body.style.backgroundColor = iteration % 2 ? '#000000' : '#101215';
+      document.body.classList.remove('no-transition');
+      $('banner').innerText = 'Self-test: collecting results…';
+      send({ type: 'done' });
     }
 
-    const params = new URLSearchParams(document.location.search);
-    const partial = params.get('partial');
-    const full = params.get('full');
+    function el(tag, text) {
+      const e = document.createElement(tag);
+      if (text !== undefined) e.textContent = text;
+      return e;
+    }
 
-    if (partial || full) {
-      const partialFps = Math.round(1000 / partial);
-      const fullFps = Math.round(1000 / full);
-      const result = document.getElementById('result');
-      
-      result.innerText = `FPS
-      Partial: ${partialFps} (${Math.round(partial)} ms)
-      Full: ${fullFps} (${Math.round(full)} ms)`
-      result.style.display = 'block';
+    window.rwvShowResult = (report) => {
+      const body = $('result-body');
+      body.textContent = '';
+
+      // The verdict first, in large type: it's what the test is run for.
+      const names = { device: 'device', server: 'server CPU', network: 'network', browser: 'browser' };
+      const verdict = el('div');
+      verdict.className = 'verdict';
+      const line = (label, value, note) => {
+        const d = el('div', `${label}: `);
+        d.appendChild(el('b', value));
+        if (note) d.appendChild(el('span', ` (${note})`));
+        verdict.appendChild(d);
+      };
+      // How long a change takes to appear on the device, and what limits it.
+      const stage = (n) => report.stages.find(s => s.name === n);
+      for (const [n, label] of [['small', 'Small change'], ['full', 'Full screen']]) {
+        const s = stage(n);
+        if (s) line(label, `${s.latencyMs} ms`, `limit: ${names[s.limit]}`);
+        else line(label, 'no data');
+      }
+      if (report.recommendedMinFrameIntervalMs !== undefined) {
+        // Measured while scrolling: the lowest interval at which the screen keeps up.
+        line('min_frame_interval', `${report.recommendedMinFrameIntervalMs} ms`);
+      } else {
+        // Estimates: smooth animations / no lag on full-screen changes (explained below).
+        const mfi = report.minFrameInterval || {};
+        const mfiValues = [mfi.smoothMs, mfi.noLagMs].filter(v => v !== undefined);
+        if (mfiValues.length)
+          line('min_frame_interval', `${[...new Set(mfiValues)].join(' / ')} ms`);
+      }
+      body.appendChild(verdict);
+
+      // Where the time goes per stage (medians, ms); the largest part is highlighted.
+      // Max values are in the server log.
+      const short = { small: 'Small', partial: 'Partial', full: 'Full' };
+      const table = el('table');
+      const head = el('tr');
+      for (const h of ['', 'KB', 'Total', 'Browser', 'Server', 'Net', 'Device']) head.appendChild(el('th', h));
+      table.appendChild(head);
+      for (const s of report.stages) {
+        const row = el('tr');
+        for (const c of [short[s.name] || s.label, s.kbPerFrame, s.latencyMs]) row.appendChild(el('td', String(c)));
+        for (const part of ['browser', 'server', 'network', 'device']) {
+          const td = el('td', String(s[`${part}Ms`]));
+          if (part === s.limit) td.className = 'limit';
+          row.appendChild(td);
+        }
+        table.appendChild(row);
+      }
+      body.appendChild(table);
+
+      // Scrolling bursts per min_frame_interval; the recommended one is highlighted.
+      if (report.bursts && report.bursts.length) {
+        const bt = el('table');
+        const bh = el('tr');
+        for (const h of ['Scrolling at', 'fps', 'Behind']) bh.appendChild(el('th', h));
+        bt.appendChild(bh);
+        for (const b of report.bursts) {
+          const row = el('tr');
+          const behind = b.timedOut ? '> 10 s' : `${b.lagMs} ms`;
+          for (const c of [`${b.intervalMs} ms`, b.fps, behind]) row.appendChild(el('td', String(c)));
+          if (b.intervalMs === report.recommendedMinFrameIntervalMs) row.firstChild.className = 'best';
+          if (b.lagging) row.lastChild.className = 'limit';
+          bt.appendChild(row);
+        }
+        body.appendChild(bt);
+      }
+
+      const list = el('ul');
+      for (const r of report.recommendations) list.appendChild(el('li', r));
+      body.appendChild(list);
+    };
+
+    if (new URLSearchParams(location.search).get('view') === 'result') {
+      $('result').style.display = 'block';
+      send({ type: 'result-ready' });
     } else {
-      setTimeout(() => start(), 5_000);
+      runTest();
     }
   </script>
 </body>
 </html>
-

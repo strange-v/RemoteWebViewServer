@@ -41,25 +41,43 @@ export class DeviceBroadcaster {
     return this._clients.get(id)?.size ?? 0;
   }
 
-  public sendFrameChunked(id: string, data: FrameOut, frameId: number, maxBytes = 12_000): void {
+  // True while a client's socket still holds unsent data, i.e. the link is slower than
+  // the frame rate. Encoding more frames then would only queue up stale ones.
+  // Data already handed to the OS send buffer isn't visible here.
+  isCongested(id: string): boolean {
+    const st = this._state.get(id);
+    if (st && (st.sending || st.queue.length > 0)) return true;
     const peers = this._clients.get(id);
-    if (!peers || peers.size === 0 || data.rects.length === 0) return;
+    if (!peers) return false;
+    for (const ws of peers) {
+      if (ws.bufferedAmount > 0) return true;
+    }
+    return false;
+  }
+
+  // Returns the number of bytes queued (0 when there is nobody to send to).
+  public sendFrameChunked(id: string, data: FrameOut, frameId: number, maxBytes = 12_000): number {
+    const peers = this._clients.get(id);
+    if (!peers || peers.size === 0 || data.rects.length === 0) return 0;
 
     const packets = buildFramePackets(data.rects, data.encoding, frameId, data.isFullFrame, maxBytes);
 
     const st = this._ensureState(id);
     st.queue.push({ frameId, packets });
     this._drainAsync(id).catch(() => {});
+    return packets.reduce((n, p) => n + p.length, 0);
   }
 
-  public startSelfTestMeasurement(id: string): void {
+  // Asks the client for its render stats since the previous request (it resets them on reply).
+  public requestFrameStats(id: string): boolean {
     const peers = this._clients.get(id);
-    if (!peers || peers.size === 0) return;
+    if (!peers || peers.size === 0) return false;
 
     const packet = buildFrameStatsPacket();
     const st = this._ensureState(id);
     st.queue.push({ packets: [packet] });
     this._drainAsync(id).catch(() => {});
+    return true;
   }
 
   public sendCurrentURL(id: string, url: string): void {
