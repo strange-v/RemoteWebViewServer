@@ -34,6 +34,8 @@ export type DeviceSession = {
 
 const PREFERS_REDUCED_MOTION = /^(1|true|yes|on)$/i.test(process.env.PREFERS_REDUCED_MOTION ?? '');
 
+const CONGESTION_RETRY_MS = 10;
+
 const devices = new Map<string, DeviceSession>();
 let _cleanupRunning = false;
 export const broadcaster = new DeviceBroadcaster();
@@ -149,13 +151,24 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
     const dev = newDevice;
     dev.throttleTimer = undefined;
 
+    if (!dev.pendingB64) return;
+    if (broadcaster.isCongested(id)) {
+      // Keep only the newest frame until the client catches up; the diff is computed
+      // against the last frame actually sent, so skipping frames is safe.
+      dev.throttleTimer = setTimeout(flushPending, CONGESTION_RETRY_MS);
+      return;
+    }
+
     const b64 = dev.pendingB64;
     dev.pendingB64 = undefined;
-    if (!b64 || b64 === dev.processedB64) return;
+    if (b64 === dev.processedB64) return;
 
     // Frames must be processed one at a time: FrameProcessor diffs against the previous
     // frame, and a later frame must never be sent before an earlier one.
     dev.processing = true;
+    // The interval is measured from the start of processing, so minFrameInterval is the
+    // frame period rather than an extra pause after each frame.
+    dev.lastProcessedMs = Date.now();
     try {
       dev.processedB64 = b64;
       const pngFull = Buffer.from(b64, 'base64');
@@ -175,7 +188,6 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
     } catch (e) {
       console.warn(`[device] Failed to process frame for ${id}: ${(e as Error).message}`);
     } finally {
-      dev.lastProcessedMs = Date.now();
       dev.processing = false;
     }
     // Frames that arrived meanwhile were held back; process the newest one.

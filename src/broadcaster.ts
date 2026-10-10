@@ -41,6 +41,20 @@ export class DeviceBroadcaster {
     return this._clients.get(id)?.size ?? 0;
   }
 
+  // True while a client's socket still holds unsent data, i.e. the link is slower than
+  // the frame rate. Encoding more frames then would only queue up stale ones.
+  // Data already handed to the OS send buffer isn't visible here.
+  isCongested(id: string): boolean {
+    const st = this._state.get(id);
+    if (st && (st.sending || st.queue.length > 0)) return true;
+    const peers = this._clients.get(id);
+    if (!peers) return false;
+    for (const ws of peers) {
+      if (ws.bufferedAmount > 0) return true;
+    }
+    return false;
+  }
+
   public sendFrameChunked(id: string, data: FrameOut, frameId: number, maxBytes = 12_000): void {
     const peers = this._clients.get(id);
     if (!peers || peers.size === 0 || data.rects.length === 0) return;

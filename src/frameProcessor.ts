@@ -84,8 +84,9 @@ export class FrameProcessor {
       ? this._splitWholeFrame(rgba.width, rgba.height, this._cfg.fullframeTileCount)
       : this._mergeChangedTiles(tiles, rgba.width, rgba.height);
 
-    const rects: Rect[] = [];
-    for (const b of boxes) await this._encodeFittingAsync(rgba, b, chosenEncoding, rects);
+    // Encode in parallel: sharp runs each encode on the libuv thread pool.
+    const parts = await Promise.all(boxes.map(b => this._encodeFittingAsync(rgba, b, chosenEncoding)));
+    const rects = parts.flat();
 
     this._prevFrame = rgba;
     this._iter++;
@@ -102,21 +103,18 @@ export class FrameProcessor {
   }
 
   // Encodes a box, splitting it in halves until every piece fits into one message.
-  private async _encodeFittingAsync(rgba: RGBA, b: Box, enc: Encoding, out: Rect[]): Promise<void> {
+  private async _encodeFittingAsync(rgba: RGBA, b: Box, enc: Encoding): Promise<Rect[]> {
     const maxBytesPerTile = this._cfg.maxBytesPerMessage - FRAME_HEADER_BYTES - TILE_HEADER_BYTES;
     const data = await this._encode(this._extractRaw(rgba, b.x, b.y, b.w, b.h), b.w, b.h, enc);
-    if (data.length <= maxBytesPerTile) {
-      out.push({ ...b, data });
-      return;
-    }
+    if (data.length <= maxBytesPerTile) return [{ ...b, data }];
 
     const halves = this._splitBox(b);
     if (!halves) {
       // A tiny box that still doesn't fit: maxBytesPerMessage is unrealistically small.
-      out.push({ ...b, data: await this._makeRedFrameAsync(b.w, b.h, enc) });
-      return;
+      return [{ ...b, data: await this._makeRedFrameAsync(b.w, b.h, enc) }];
     }
-    for (const h of halves) await this._encodeFittingAsync(rgba, h, enc, out);
+    const parts = await Promise.all(halves.map(h => this._encodeFittingAsync(rgba, h, enc)));
+    return parts.flat();
   }
 
   private _splitBox(b: Box): [Box, Box] | null {
