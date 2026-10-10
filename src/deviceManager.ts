@@ -24,6 +24,10 @@ export type DeviceSession = {
   pendingB64?: string;
   throttleTimer?: NodeJS.Timeout;
   lastProcessedMs?: number;
+
+  // last screencast frame, kept to re-send a full frame on request
+  lastB64?: string;
+  resendFullFrame: () => void;
 };
 
 const PREFERS_REDUCED_MOTION = /^(1|true|yes|on)$/i.test(process.env.PREFERS_REDUCED_MOTION ?? '');
@@ -40,7 +44,7 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
   if (device) {
     if (deviceConfigsEqual(device.cfg, cfg)) {
       device.lastActive = Date.now();
-      device.processor.requestFullFrame();
+      device.resendFullFrame();
       return device;
     } else {
       console.log(`[device] Reconfiguring device ${id}`);
@@ -109,6 +113,8 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
     pendingB64: undefined,
     throttleTimer: undefined,
     lastProcessedMs: undefined,
+    lastB64: undefined,
+    resendFullFrame: () => { },
   };
   devices.set(id, newDevice);
   newDevice.processor.requestFullFrame();
@@ -150,21 +156,35 @@ export async function ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<
     }
   };
 
+  const scheduleFlush = () => {
+    if (newDevice.throttleTimer) return;
+    const now = Date.now();
+    const since = newDevice.lastProcessedMs ? (now - newDevice.lastProcessedMs) : Infinity;
+    const delay = Math.max(0, cfg.minFrameInterval - (Number.isFinite(since) ? since : 0));
+    newDevice.throttleTimer = setTimeout(flushPending, delay);
+  };
+
+  // Screencast only emits frames when the page changes, so a full-frame request on a
+  // static page has to re-process the last frame we received.
+  newDevice.resendFullFrame = () => {
+    newDevice.processor.requestFullFrame();
+    newDevice.prevFrameHash = 0;
+    if (!newDevice.pendingB64 && newDevice.lastB64)
+      newDevice.pendingB64 = newDevice.lastB64;
+    if (newDevice.pendingB64)
+      scheduleFlush();
+  };
+
   session.on('Page.screencastFrame', async (evt: any) => {
     // ACK immediately to keep producer running
     session.send('Page.screencastFrameAck', { sessionId: evt.sessionId }).catch(() => { });
 
+    newDevice.lastB64 = evt.data;
     if (broadcaster.getClientCount(newDevice.deviceId) === 0)
       return;
     newDevice.lastActive = Date.now();
     newDevice.pendingB64 = evt.data;
-
-    const now = Date.now();
-    const since = newDevice.lastProcessedMs ? (now - newDevice.lastProcessedMs) : Infinity;
-    if (!newDevice.throttleTimer) {
-      const delay = Math.max(0, cfg.minFrameInterval - (Number.isFinite(since) ? since : 0));
-      newDevice.throttleTimer = setTimeout(flushPending, delay);
-    }
+    scheduleFlush();
   });
 
   const handleNavigation = (url: string) => {

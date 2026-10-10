@@ -43,6 +43,9 @@ wss.on("connection", async (ws, req) => {
       case MsgType.OpenURL:
         inputRouter.handleOpenURLPacketAsync(dev, buf).catch(e => console.warn(`Failed to handle OpenURL packet: ${(e as Error).message}`));
         break;
+      case MsgType.RequestFullFrame:
+        dev.resendFullFrame();
+        break;
     }
   })
 

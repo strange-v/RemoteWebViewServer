@@ -18,17 +18,23 @@
 //
 // Current URL packet:
 //   [type u8][ver u8][len u32][url utf8 bytes...]
+//
+// RequestFullFrame message (client -> server):
+//   [type u8=7][ver u8=1]
+//   Sent when the client lost or failed to decode part of the stream; the server
+//   re-sends the current page as a full frame.
 
 export const PROTOCOL_VERSION = 1 as const;
 
 export enum MsgType {
-  Unknown     = 0,
-  Frame       = 1,
-  Touch       = 2,
-  FrameStats  = 3,
-  OpenURL     = 4,
-  Keepalive   = 5,
-  CurrentURL  = 6,
+  Unknown          = 0,
+  Frame            = 1,
+  Touch            = 2,
+  FrameStats       = 3,
+  OpenURL          = 4,
+  Keepalive        = 5,
+  CurrentURL       = 6,
+  RequestFullFrame = 7,
 }
 
 export enum Encoding {
