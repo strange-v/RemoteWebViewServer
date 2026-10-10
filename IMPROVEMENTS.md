@@ -1,93 +1,36 @@
-# RemoteWebView Server — план покращень
+# RemoteWebView Server — open improvements
 
-Станом на 2026-10-10
+As of 2026-10-10
 
-## Огляд
+Only what is not done yet and still relevant. Completed work (stability, image correctness, backpressure, recovery from browser failures, the new self-test) is in the history of the `improvements` branch.
 
-Сервер має 6 дефектів P1, через які він падає або на екрані ESP показується неправильна картинка. Їх варто закрити до будь-якої оптимізації CPU. Після них головний виграш у затримці дасть backpressure (P2-1).
+## Security
 
-Джерела — два незалежні ревю коду `RemoteWebViewServer/src` (v1.2.2, коміт `7e96799`):
+The server drives a browser that is logged in to Home Assistant, and its WebSocket port is open to the LAN without authentication.
 
-- **А** — статичний аналіз + звірка з протоколом клієнта.
-- **Б** — стороннє ревю: два дефекти відтворено, TypeScript-збірка проходить, тестів немає.
+| Problem | Where | What to do |
+| --- | --- | --- |
+| Anyone on the LAN can connect with any `id`, see the dashboard and control it. | `index.ts` (`connection` handler) | Optional `AUTH_TOKEN` (env) / `auth_token` (HA add-on). The client passes `?token=…`; a missing or wrong token closes the socket with 1008 before a tab is created. Compare with `crypto.timingSafeEqual`. Without a token configured, behave as now and log a warning. |
+| OpenURL opens any scheme, including `file://`: container files such as `/data/options.json` can be read off the screen. | `inputRouter.ts` (`handleOpenURLPacketAsync`) | Allow only `http:`/`https:` and the `self-test` keyword; reject the rest with a warning. Add `ALLOWED_URL_SCHEMES` for exceptions. Apply the same check to the URL a device is recreated on after a tab crash. |
+| `expose_debug_proxy` exposes CDP without authentication: full control of the browser, including HA cookies. | README, add-on option docs | Document a clear warning. |
 
-Обидва ревю незалежно знайшли однакові 7 головних проблем, тож пріоритети узгоджені. Продуктивність на реальному Chromium та ESP32 не вимірювалась у жодному з них.
+Client side: an `auth_token` ESPHome option and a `token` parameter in the connection URL. The release is compatible both ways: an old server ignores `token`, a new server without a token works as before. Only clients configured with a `file://` or `data:` URL break. Limitation: over `ws://` the token travels in plain text.
 
-## P1 — падіння сервера та зіпсована картинка
+## Pacing frames to the device
 
-Кожен дефект тут або кладе процес Node, або залишає на дисплеї неправильне зображення, яке саме не виправляється. Виправлення здебільшого локальні, від кількох рядків до однієї функції.
+Backpressure kicks in late. First the device's decode queue fills (12 messages), then the lwIP TCP window and the server's OS send buffer, which `bufferedAmount` can't see. For full-screen frames that is 0.5 s or more of stale frames: the screen lags behind while scrolling or switching tabs. That's why a single `min_frame_interval` is always a trade-off between smooth animations and lag on full-screen changes, and why the self-test measures scrolling at several intervals.
 
-| # | Проблема | Де | Виправлення | Джерело |
-| --- | --- | --- | --- | --- |
-| P1-1 | Некоректне підключення кладе процес. Кидки `makeConfigFromParams` (немає `h`/`w`, не число) та `ensureDeviceAsync` стають unhandled rejection. Порожнє binary-повідомлення дає `RangeError` у `readUInt8(0)`. | `index.ts:22`, `:27`, `:33` | `try/catch` у обробнику `connection` з закриттям лише цього сокета (1008/1011); `if (buf.length < 2) return`. | А, Б |
-| P1-2 | Хеш тайлів бачить лише канал R. `hash32` читає кожен 4-й байт RGBA, тож зміни G/B не помічаються до full frame (`ffe=50`). Б відтворив: 0 прямокутників після зміни G/B. Семплінг не дає виграшу в часі: заміри (тайл 32px, 800×480) — поточний 3.9 мс/кадр, u32 FNV по всіх каналах 2.2 мс, xxhash 1.7 мс, порівняння рядків на місці 1.0 мс. | `util.ts:1`, `frameProcessor.ts:65` | Порівнювати рядки тайла з попереднім кадром через `Buffer.compare` (точно і без копій) або хешувати всі байти (`xxhash-wasm` уже в залежностях). | А, Б |
-| P1-3 | Обробка кадрів одного пристрою йде паралельно. `flushPending` скидає таймер до `await sharp`, і новий кадр запускає другу обробку на тому ж `_prev`. Результат: неправильні diff і старий кадр поверх нового. Спрацьовує, коли обробка довша за `mfi` (80 мс). | `deviceManager.ts:122-165` | Один послідовний цикл на пристрій: прапорець `processing`, зберігати лише найновіший `pendingB64`, після завершення знову викликати `scheduleFlush()`. | А, Б |
-| P1-4 | Початковий OpenURL губиться. Клієнт шле його одразу на connect (`remote_webview.cpp:306`), а сервер вішає `message` лише після `await ensureDeviceAsync` (вкладка + inject-скрипт до 5 с). Новий пристрій лишається на `about:blank`. | `index.ts:27-29` | Вішати обробник синхронно, а всередині чекати `devPromise` (або черга команд до готовності). | А, Б |
-| P1-5 | Завеликий JPEG замінюється червоним прямокутником. Хеші вже оновлені, тож наступний diff не відновить зображення. Б відтворив: детальний кадр 480×480 зі стандартними налаштуваннями → усі 4 прямокутники червоні. | `frameProcessor.ts:87-94` | Ділити rect навпіл, доки він не влізе; розмір перевіряти після кодування; знижувати якість лише як останній крок. | А, Б |
-| P1-6 | Інші unhandled rejections. `setFrameRenderTimeAsync` викликається без `await`/`catch`, і відхилений `Page.navigate` кладе процес. | `inputRouter.ts:28` | `return`/`await` у `handleFrameStatsPacketAsync`; глобальний `process.on('unhandledRejection')` з логуванням як страховка. | А |
+A smaller client queue alone doesn't fix it. With `decode_queue_depth: 4` on an ESP32-S3 (480×480, ~46 ms per full frame), the self-test's scrolling burst at `min_frame_interval: 20` still left the screen 1.1–1.7 s behind: the server sent 68 full frames in 2 s while the device drew ~36, and the ~650 KB in between sat mostly in TCP buffers, far beyond the 4-message queue. At 60 ms it was 0.12–0.2 s behind, at 15 fps instead of 18.
 
-## P2 — затримка, продуктивність, ресурси
-
-Найбільший вплив на відчуття «лагів» на ESP32 має P2-1: зараз затримка на повільному Wi-Fi росте без обмеження. Решта зменшує CPU на HA-хості та памʼять.
-
-| # | Проблема | Де | Виправлення | Джерело |
-| --- | --- | --- | --- | --- |
-| P2-1 | Немає backpressure. `ws.send` без перевірки `bufferedAmount`; `await Promise.resolve()` не чекає на сокет. Старі кадри накопичуються, росте затримка і памʼять. | `broadcaster.ts:103-111` | Не обробляти новий кадр, поки `bufferedAmount` вище порогу або не прийшов callback останнього `send`; тримати лише найсвіжіший `pendingB64`. Diff із `_prev` лишається правильним. Якщо вже закодований diff відкинуто, потік відновлювати повним кадром. | А, Б |
-| P2-2 | Кодування rect'ів послідовне: кожен `await sharp(...)` чекає попередній. | `frameProcessor.ts:108-131` | `Promise.all` по rect'ах, щоб задіяти threadpool libuv/libvips. | А |
-| P2-3 | Зайве копіювання RGBA. Кожен тайл копіюється для хешу (повна копія кадру щоразу), а змінені ділянки ще раз — для кодування. Буфери RGBA замість RGB (`ensureAlpha`). | `frameProcessor.ts:65`, `deviceManager.ts:143` | Порівнювати на місці (див. P1-2); для кодування давати sharp `extract` з повного буфера; 3 канали замість 4 (−25% памʼяті). Спершу заміряти. | А, Б |
-| P2-4 | Screencast працює без клієнтів до 5 хв (до idle cleanup): Chrome далі кодує PNG. | `deviceManager.ts:178` | `Page.stopScreencast`, коли відключився останній клієнт; знову запускати в `ensureDeviceAsync`. | А |
-| P2-5 | Ефективний інтервал кадрів = `mfi` + час обробки, бо `lastProcessedMs` пишеться наприкінці. | `deviceManager.ts:155-163` | Відлічувати від початку обробки. | А |
-| P2-6 | Одночасні підключення з однаковим `id` створюють дві вкладки; одна зі screencast лишається відкритою назавжди. | `deviceManager.ts:39-119` | Серіалізувати створення й реконфігурацію за `id` (мапа in-flight promise). | А, Б |
-| P2-7 | CDP-сесії не видаляються. `sessions` у `CdpConnection` тримає сесії та їхні обробники після закриття вкладки, а разом із ними стан пристрою та `lastB64`. | `cdpRoot.ts:49` | `removeSession(id)` у `deleteDeviceAsync` та на `Target.detachedFromTarget`. | Б |
-
-## P3 — надійність Chrome/CDP і безпека
-
-Якщо Chrome або вкладка падає, сервер сам не відновлюється, а healthcheck цього не помічає. WS не має автентифікації.
-
-| # | Проблема | Де | Виправлення | Джерело |
-| --- | --- | --- | --- | --- |
-| P3-1 | Healthcheck завжди відповідає `ok`, тож watchdog HA не бачить мертвий CDP. | `index.ts:58` | Повертати 500, коли root CDP-сокет закритий, або завершувати процес на `close`. | А |
-| P3-2 | У CDP-команд немає таймаутів. `send` після закриття сокета повертає promise, який ніколи не завершиться. `JSON.parse` у `_onMessage` не обгорнутий. | `cdpRoot.ts:41-73`, `:81` | Реджект одразу, якщо `readyState !== OPEN`; таймаут на команду; `try` навколо parse. `CdpSession.send` замість доступу через `as any` делегувати в root. | А |
-| P3-3 | Краш вкладки (`Inspector.targetCrashed`, наприклад OOM на дашборді з камерами) не обробляється. Екран лишається чорним, поки приходять keepalive. | `deviceManager.ts` | Перестворювати пристрій (або reload) і відновлювати останній URL. | А |
-| P3-4 | Після реконфігурації чи idle cleanup у замиканні обробника `ws` лишається старий `dev`. Cleanup не перевіряє `getClientCount`. | `index.ts:27`, `deviceManager.ts:211` | Брати пристрій з мапи за `id` на кожне повідомлення; не видаляти пристрій з підключеними клієнтами. | А |
-| P3-5 | WS без автентифікації: будь-хто в LAN бачить залогінений HA-дашборд і керує ним. OpenURL приймає `file://`, тож можна читати файли контейнера, зокрема `/data/options.json`. | `index.ts:18`, `inputRouter.ts:41` | Опційний `AUTH_TOKEN` у query; whitelist схем `http`/`https` (`self-test` — окремо). Потрібна підтримка токена в клієнті. | А |
-
-## Дрібниці та техборг
-
-Ці пункти не ламають роботу, їх можна закривати попутно.
-
-- **Throttle рухів спільний для всіх пристроїв** (`inputRouter.ts:6`). Краще зберігати його в `DeviceSession` (А, Б).
-- **Гілка `Tap` мертва**: `parseTouchPacket` відкидає `kind > Up`. Клієнт Tap не шле (А).
-- **Коментар про FrameStats застарів**: у `protocol.ts` написано u16, а фактично 10 байтів і u32 (збігається з клієнтом) (А).
-- **Різні дефолти `max_bytes_per_message`**: 61440 у `config.yaml`, 14336 у `run.sh` і в коді (А).
-- **Мертвий код і залежності**: `setConfigFor`/`getConfigFor`, `getSharedContextId`; `devtools-protocol`, `ts-node`; `xxhash-wasm`, якщо P1-2 зробити через `Buffer.compare` (А).
-- **`dist/` закомічений у git**, хоча Dockerfile збирає його сам, тож він може розійтися з `src/` (А).
-- **Шлях профілю `/var/temp/...`** — ймовірно, малося на увазі `/var/tmp` (`browser.ts:8`) (А).
-- **Тестів немає**, хоча `vitest` налаштований (Б).
+**Frame ack.** After drawing a frame the client sends `FrameAck [type=8][ver][frame_id u32]`, and the server keeps at most 2 frames in flight. Each frame size then finds its own pace, and `min_frame_interval` only caps server CPU. To keep in mind:
+- a window of 2, not 1, so pipeline stages overlap and Wi-Fi latency on acks doesn't lower the frame rate;
+- a ~1 s timeout and a reset on reconnect, so a lost ack can't stall the stream;
+- ack frames the client didn't draw too (dropped or corrupt);
+- send acks on the client without blocking the decode task;
+- fall back to the current behavior for clients that don't send acks.
 
 ## Self-test
 
-README клієнта радить ставити `min_frame_interval` трохи більшим за час рендеру з self-test. Але тест міряє не те, що потрібно для цієї поради, а після backpressure (P2-1) і сама порада застаріла: сервер уже не шле швидше, ніж клієнт приймає, і `mfi` лише обмежує навантаження на CPU та мережу.
-
-| # | Проблема | Де | Виправлення |
-| --- | --- | --- | --- |
-| S-1 | «Час рендеру» — це декодування на ESP від першого взятого з черги пакета до останнього. Мережа до першого пакета, черга і сервер не враховуються. Результат `FPS = 1000/ms` вводить в оману. | `remote_webview.cpp:593`, `self-test/test1.html` | Міряти «пінг-понгом» затримку від зміни сторінки до пікселів: наступна зміна лише після того, як клієнт підтвердив попередній кадр (відповідь на `FrameStats`). Безперервний потік без `mfi` пробували: ESP32-S3 не встигає декодувати повні кадри (~75 мс), черга переповнюється, `rwv_decode` забирає CPU 1 і task watchdog перезавантажує пристрій. |
-| S-2 | Одне середнє на етап: у «partial» здебільшого крихітні оновлення чипа плюс примусовий full frame. Хвостів не видно. | `selfTest.ts` | Окремі етапи: дрібна зміна, часткова, повний екран. Для кожного медіана затримки, КБ на кадр, час сервера й пристрою і що з них найбільше. `min_frame_interval` рекомендувати від часу пристрою на повний кадр: поки клієнт не гальмує TCP, саме він захищає ESP від перевантаження. |
-| S-3 | Таймери сервера (5/70/125 с) і сторінки ніяк не синхронізовані. Повільне завантаження або перепідключення зсуває вікна. | `selfTest.ts`, `test1.html` | Сторінка повідомляє межі етапів через `Runtime.addBinding`, і сервер збирає статистику саме на цих межах. |
-| S-4 | Клієнт шле `bytes`, але сервер читає лише час. | `protocol.ts` | Читати обидва поля. |
-| S-5 | Шлях `file:///app/...` зашитий, тож працює лише в Docker. Якщо кадрів не було, на екрані `Infinity` FPS. | `selfTest.ts` | Шлях відносно модуля; порожні етапи показувати як «немає даних». |
-| S-6 | Результат — голий FPS без висновків. | `test1.html` | Показати вузьке місце (пристрій, CPU сервера, мережа) і конкретні значення: рекомендований `min_frame_interval`, `max_bytes_per_msg`, `jpeg_quality`. Звіт також писати в лог сервера. |
-| S-7 | (Опційно, з клієнтом.) У `FrameStats` немає кількості кадрів, max і розбивки rx/queue/decode/draw. | протокол | Розширити пакет назад сумісно. Перетинається з P4 у `docs/IMPROVEMENTS.md` клієнта, тому робити разом з ним. |
-
-## Порядок впровадження
-
-Пропоновано пʼять етапів. Кожен — окремий PR, який можна перевірити сам по собі.
-
-1. **Стабільність процесу** (зроблено): P1-1, P1-6, P1-4, P2-6. Усе в `index.ts`/`deviceManager.ts`, архітектура не змінюється.
-2. **Коректність картинки** (зроблено): P1-2, P1-3, P1-5. Додати перші тести `vitest` на `FrameProcessor`: зміна лише G/B дає rect; детальний кадр 480×480 без червоних rect'ів; жоден пакет не більший за `mbpm`.
-3. **Затримка** (зроблено): P2-1 (backpressure), потім P2-2 і P2-5. Заміряти час від дотику до кадру на реальному ESP32 до і після, зокрема за слабкого Wi-Fi.
-4. **Ресурси та відновлення** (зроблено): P2-3 (спершу профілювання), P2-4, P2-7, P3-1…P3-4.
-4.5. **Self-test**: S-1…S-6 на сервері. Окремо оновити рекомендацію щодо `min_frame_interval` у README клієнта. S-7 робити разом із клієнтом.
-5. **Безпека**: P3-5. Зачіпає клієнт і протокол, тому потребує скоординованого релізу.
-
-Дрібниці закривати в тих PR, де зачіпається відповідний файл.
+| Problem | What to do |
+| --- | --- |
+| `FrameStats` has no frame count, no max time and no rx/queue/decode/draw breakdown from the client. So "Device" in the self-test is an average and the network part is derived as a remainder. | Extend the packet backward-compatibly (fields after the existing 10 bytes). Do it together with P4 in the client's `docs/IMPROVEMENTS.md`. |
