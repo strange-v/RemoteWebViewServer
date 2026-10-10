@@ -148,7 +148,6 @@ export class CdpSession {
 }
 
 let root: CdpConnection | null = null;
-let sharedContextId = '';
 let readyPromise: Promise<void> | null = null;
 
 export async function initCdpRootAsync(wsUrl: string): Promise<void> {
@@ -172,4 +171,3 @@ export function waitForCdpReadyAsync(): Promise<void> {
 }
 
 export function getRoot() { return root; }
-export function getSharedContextId() { return sharedContextId; }

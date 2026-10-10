@@ -135,24 +135,22 @@ export class FrameProcessor {
   private _splitWholeFrame(w: number, h: number, n: number): { x: number; y: number; w: number; h: number }[] {
     if (n <= 1) return [{ x: 0, y: 0, w, h }];
 
-    if (n === 2) {
-      const h1 = Math.floor(h / 2);
-      const h2 = h - h1;
-      return [
-        { x: 0, y: 0, w, h: h1 },
-        { x: 0, y: h1, w, h: h2 },
-      ];
-    }
-
-    let rows = Math.floor(Math.sqrt(n));
+    // Two parts are horizontal bands; otherwise a grid of rows x cols = n.
+    let rows = n === 2 ? 2 : Math.floor(Math.sqrt(n));
     while (rows > 1 && (n % rows !== 0)) rows--;
     const cols = Math.floor(n / rows);
 
+    // Inner edges go to the nearest multiple of SPLIT_ALIGN, so tiles stay friendly to
+    // HW JPEG decoders (the ESP32-P4 one needs a width that is a multiple of 16).
     const split = (size: number, parts: number): number[] => {
       const out: number[] = [];
       let prev = 0;
       for (let i = 1; i <= parts; i++) {
-        const cur = Math.floor((i * size) / parts);
+        let cur = size;
+        if (i < parts) {
+          cur = Math.round((i * size) / parts / SPLIT_ALIGN) * SPLIT_ALIGN;
+          cur = Math.min(Math.max(cur, prev + 1), size - (parts - i)); // no empty parts
+        }
         out.push(cur - prev);
         prev = cur;
       }

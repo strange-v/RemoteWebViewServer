@@ -115,4 +115,35 @@ describe("FrameProcessor", () => {
     for (const pkt of buildFramePackets(out.rects, out.encoding, 1, out.isFullFrame, DEFAULT_CFG.maxBytesPerMessage))
       expect(pkt.length).toBeLessThanOrEqual(DEFAULT_CFG.maxBytesPerMessage);
   });
+
+  // Full frame of a flat color: every tile fits, so the rects are exactly the full-frame split.
+  const fullFrameRects = async (w: number, h: number, tiles: number) => {
+    const fp = new FrameProcessor({ ...DEFAULT_CFG, fullframeTileCount: tiles, maxBytesPerMessage: 1 << 20 });
+    const out = await fp.processFrameAsync(solidFrame(w, h, [9, 9, 9]));
+    return out.rects.map(({ x, y, w, h }) => ({ x, y, w, h }));
+  };
+
+  it("aligns inner edges of the full-frame split to 16 px", async () => {
+    // 600 / 2 = 300 is not a multiple of 16: the edge moves to 304
+    expect(await fullFrameRects(1024, 600, 4)).toEqual([
+      { x: 0, y: 0, w: 512, h: 304 }, { x: 512, y: 0, w: 512, h: 304 },
+      { x: 0, y: 304, w: 512, h: 296 }, { x: 512, y: 304, w: 512, h: 296 },
+    ]);
+    // Two parts stay horizontal bands
+    expect(await fullFrameRects(1024, 600, 2)).toEqual([
+      { x: 0, y: 0, w: 1024, h: 304 }, { x: 0, y: 304, w: 1024, h: 296 },
+    ]);
+    // Sizes that already divide evenly are unchanged
+    expect(await fullFrameRects(480, 480, 4)).toEqual([
+      { x: 0, y: 0, w: 240, h: 240 }, { x: 240, y: 0, w: 240, h: 240 },
+      { x: 0, y: 240, w: 240, h: 240 }, { x: 240, y: 240, w: 240, h: 240 },
+    ]);
+    expect(await fullFrameRects(480, 480, 1)).toEqual([{ x: 0, y: 0, w: 480, h: 480 }]);
+  });
+
+  it("never produces empty parts on tiny frames", async () => {
+    const rects = await fullFrameRects(20, 10, 4);
+    expect(rects.every(r => r.w > 0 && r.h > 0)).toBe(true);
+    expect(area(rects)).toBe(20 * 10);
+  });
 });

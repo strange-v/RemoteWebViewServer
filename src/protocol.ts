@@ -117,7 +117,7 @@ export function parseTouchPacket(buf: Buffer): TouchPacket | null {
   if (buf.readUInt8(1) !== PROTOCOL_VERSION) return null;
   
   const kind = buf.readUInt8(2);
-  if (kind > TouchKind.Up) return null;
+  if (kind === TouchKind.Unknown || kind > TouchKind.Tap) return null;
   
   const pointerId = buf.readUInt8(3);
   const x = buf.readUInt16LE(4);

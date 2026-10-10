@@ -7,7 +7,7 @@ const DEBUG_PORT = +(process.env.DEBUG_PORT || 9221);
 const PREFERS_REDUCED_MOTION = /^(1|true|yes|on)$/i.test(process.env.PREFERS_REDUCED_MOTION ?? '');
 const USER_DATA_DIR = process.env.USER_DATA_DIR || (process.platform === 'win32'
   ? 'C:\\Temp\\remotewebview-profile'
-  : '/var/temp/remotewebview-profile');
+  : '/var/tmp/remotewebview-profile');
 const BROWSER_LOCALE = env.get("BROWSER_LOCALE").default("en-US").asString();
 
 async function fetchJsonVersionAsync(): Promise<{ webSocketDebuggerUrl: string } | null> {

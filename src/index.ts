@@ -1,7 +1,7 @@
 import http from 'http';
 import { WebSocketServer } from "ws"
 import env from "env-var";
-import { makeConfigFromParams, setConfigFor, logDeviceConfig, DeviceConfig } from "./config.js";
+import { makeConfigFromParams, logDeviceConfig, DeviceConfig } from "./config.js";
 import { broadcaster, ensureDeviceAsync, releaseDeviceAsync, getDevice, cleanupIdleAsync, DeviceSession } from './deviceManager.js';
 import { InputRouter } from "./inputRouter.js";
 import { bootstrapAsync } from './browser.js';
@@ -62,7 +62,6 @@ wss.on("connection", (ws, req) => {
     ws.close(1008, "invalid parameters");
     return;
   }
-  setConfigFor(id, cfg);
   logDeviceConfig(id, cfg);
 
   broadcaster.addClient(id, ws);

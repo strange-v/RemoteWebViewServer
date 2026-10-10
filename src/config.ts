@@ -39,17 +39,6 @@ function parseBool(value: string | undefined, defaultValue = false): boolean {
   return TRUE_RE.test(value);
 }
 
-const store = new Map<string, DeviceConfig>();
-
-export function getConfigFor(id: string): DeviceConfig {
-  const cfg = store.get(id);
-  if (!cfg) throw new Error(`config for id="${id}" not found`);
-  return cfg;
-}
-export function setConfigFor(id: string, cfg: DeviceConfig): void {
-  store.set(id, cfg);
-}
-
 function num(input?: string | null): number | undefined {
   if (input == null) return undefined;
   const v = Number(input);
