@@ -33,6 +33,15 @@ The server does not include a built-in on-screen keyboard, but you can inject an
 >
 > The injected script runs with full access to every page the server renders, including any active sessions, credentials, and cookies. Only use scripts from sources you fully trust. Never point this at a URL controlled by a third party.
 
+## Home Assistant auto-login
+
+The server can log the browser into Home Assistant for you, so displays survive reboots and token refresh dialogs without a manual DevTools login.
+
+- `HA_AUTH_TOKEN` (empty by default): a Home Assistant **long-lived access token**. Create a dedicated, non-admin HA user for the display (Settings → People → Users), log in once as that user and create the token in its profile (Profile → Security → Long-Lived Access Tokens). Empty disables auto-login entirely.
+- `HA_URL`: comma-separated HA base URL(s)/origins the token may be sent to, e.g. the internal and external URL (`https://ha.example.com,http://ha.local:8123`). Required when `HA_AUTH_TOKEN` is set; the server refuses to start otherwise.
+
+The token is seeded into `localStorage.hassTokens` only on the configured origins, and `/auth/...` login pages are redirected back to the dashboard (same-origin `redirect_uri`, else the origin root). In the Home Assistant add-on, set `ha_auth_token` and optionally `ha_url`; with `ha_url` empty the add-on fills it from Home Assistant's own `internal_url`/`external_url`. Without a token, a manual DevTools login keeps working exactly as before.
+
 ## Accessing the server’s tab with Chrome DevTools
 
 1. Make sure your server exposes the DevTools (CDP) port (e.g., 9222).
