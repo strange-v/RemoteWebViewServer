@@ -15,6 +15,9 @@ video: true
 udev: true
 init: false
 
+# Reads internal_url/external_url from the core API to auto-detect ha_url.
+homeassistant_api: true
+
 watchdog: "http://[HOST]:[PORT:18080]/"
 
 map:
@@ -62,3 +65,5 @@ schema:
   user_data_dir: str
   browser_locale: str
   max_device_scale_factor: "float(1,4)"
+  ha_auth_token: "password?"
+  ha_url: "url?"

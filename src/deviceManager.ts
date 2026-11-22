@@ -9,6 +9,7 @@ import { getInjectScriptFromUrl } from "./scriptLoader.js";
 import { PipelineStats, newPipelineStats } from "./pipelineStats.js";
 import { FrameAckWindow } from "./frameAckWindow.js";
 import { getScaledViewport } from "./util.js";
+import { buildHaAuthScript } from "./haAuth.js";
 
 export type DeviceSession = {
   id: string;
@@ -52,6 +53,9 @@ export type DeviceSession = {
 };
 
 const PREFERS_REDUCED_MOTION = /^(1|true|yes|on)$/i.test(process.env.PREFERS_REDUCED_MOTION ?? '');
+
+// Built once: a misconfigured HA_AUTH_TOKEN/HA_URL must fail the server at startup.
+const haAuthScript = buildHaAuthScript(process.env);
 
 const CONGESTION_RETRY_MS = 10;
 // Frames in flight to a client that acknowledges them: two let sending the next frame
@@ -182,6 +186,11 @@ async function _ensureDeviceAsync(id: string, cfg: DeviceConfig): Promise<Device
         media: 'screen',
         features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
       });
+    }
+
+    if (haAuthScript) {
+      // Before the user script, so that one already sees the seeded HA session.
+      await session.send('Page.addScriptToEvaluateOnNewDocument', { source: haAuthScript });
     }
 
     const keyboardScript = await getInjectScriptFromUrl(readInjectScriptConfig());

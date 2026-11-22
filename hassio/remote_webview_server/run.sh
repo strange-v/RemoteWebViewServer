@@ -50,6 +50,29 @@ if [ "$EXPOSE_DEBUG_PROXY" = "true" ]; then
   socat -d -d "TCP-LISTEN:${DEBUG_PROXY_PORT},fork,reuseaddr,keepalive" "TCP:127.0.0.1:${DEBUG_PORT}" &
 fi
 
+die() {
+  echo "[remote-webview] ERROR: $*" >&2
+  exit 1
+}
+
+# Optional HA auto-login: the server seeds ha_auth_token into the browser
+# localStorage on the origins of ha_url only. With no token set, nothing changes.
+HA_AUTH_TOKEN="$(get_opt ha_auth_token "")"
+HA_URL="$(get_opt ha_url "")"
+if [ -n "$HA_AUTH_TOKEN" ] && [ -z "$HA_URL" ]; then
+  # Auto-detect via the Supervisor (bounded timeout): join the configured
+  # internal and external URLs; either or both may be missing. unique also
+  # drops a duplicate when internal_url === external_url.
+  if ! HA_CONFIG="$(curl -fsS --max-time 5 \
+      -H "Authorization: Bearer ${SUPERVISOR_TOKEN:-}" \
+      http://supervisor/core/api/config)"; then
+    die "cannot read the Home Assistant configuration from the Supervisor - set the ha_url option"
+  fi
+  HA_URL="$(jq -r '[.internal_url, .external_url] | map(select(. != null)) | unique | join(",")' <<<"$HA_CONFIG")"
+  [ -n "$HA_URL" ] || die "Home Assistant has neither internal_url nor external_url set - set the ha_url option"
+fi
+export HA_AUTH_TOKEN HA_URL
+
 command -v node >/dev/null
 test -f dist/index.js
 
