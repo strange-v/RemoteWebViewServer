@@ -13,6 +13,12 @@ const BROWSER_LOCALE = env.get("BROWSER_LOCALE").default("en-US").asString();
 // client with scale s > this value gets frames upscaled on the server (blurry). Clients with a
 // lower scale still render at their own scale.
 const MAX_DEVICE_SCALE_FACTOR = env.get("MAX_DEVICE_SCALE_FACTOR").default("1").asFloatPositive();
+// Chrome headless keeps its default 800x600 window unless --window-size is passed. A device
+// wider than that gets its viewport emulated correctly but the compositor surface stays at the
+// window width, so screencast frames come out narrower than the device and deviceManager
+// stretches them with resize(fit: "fill") -> horizontal distortion. Opt-in: set
+// BROWSER_WINDOW_SIZE ("WIDTH,HEIGHT") to match the device; unset keeps Chrome's default.
+const WINDOW_SIZE = process.env.BROWSER_WINDOW_SIZE;
 
 async function fetchJsonVersionAsync(): Promise<{ webSocketDebuggerUrl: string } | null> {
   try {
@@ -33,6 +39,7 @@ async function startHeadlessIfNeededAsync(): Promise<void> {
     `--remote-debugging-port=${DEBUG_PORT}`,
     '--no-sandbox',
     `--force-device-scale-factor=${MAX_DEVICE_SCALE_FACTOR}`,
+    ...(WINDOW_SIZE ? [`--window-size=${WINDOW_SIZE}`] : []),
     '--headless=new',
     ...(PREFERS_REDUCED_MOTION ? ['--force-prefers-reduced-motion'] : []),
   ];
